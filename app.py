@@ -1,4 +1,3 @@
-import streamlit as pd
 import streamlit as st
 import datetime
 import hashlib
@@ -59,7 +58,7 @@ def guardar_usuario_en_bd(username, password, empresa):
 
 def consultar_todos_los_usuarios():
     try:
-        # Traemos TODOS los usuarios registrados en el software de golpe, sin importar su empresa
+        # Traemos TODOS los usuarios de la tabla sin filtros ni alias para evitar errores
         res = supabase.table("usuarios").select("*").execute()
         if res.data:
             return res.data
@@ -68,9 +67,10 @@ def consultar_todos_los_usuarios():
         print(f"Error real al traer usuarios: {str(e)}")
         return []
 
-def eliminar_usuario_en_bd(user_id):
+def eliminar_usuario_en_bd(username_a_borrar):
     try:
-        supabase.table("usuarios").delete().eq("id", user_id).execute()
+        # Eliminamos usando el campo username de forma segura
+        supabase.table("usuarios").delete().eq("username", username_a_borrar).execute()
         return True
     except:
         return False
@@ -346,11 +346,9 @@ if not st.session_state.autenticado:
 else:
     es_admin = st.session_state.usuario.lower().strip() == "admin"
     
-    # ⚙️ Menú dinámico según si es Admin o un usuario normal
     opciones_menu = ["📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"]
     if es_admin:
         st.sidebar.title("👑 PANEL ADMINISTRADOR")
-        # Inyectamos el control de usuarios arriba del todo para el Admin
         opciones_menu.insert(0, "👥 Gestión de Usuarios")
     else:
         st.sidebar.title(f"🏢 {st.session_state.empresa.upper()}")
@@ -364,7 +362,7 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- 👑 NUEVA SECCIÓN EXCLUSIVA: GESTIÓN DE USUARIOS (SÓLO ADMIN) ---
+    # --- 👑 SECCIÓN EXCLUSIVA: GESTIÓN DE USUARIOS (SÓLO ADMIN) ---
     if menu == "👥 Gestión de Usuarios" and es_admin:
         st.title("👥 Control Maestro de Usuarios")
         st.write("Como administrador global, aquí puedes auditar las cuentas registradas y gestionar sus accesos.")
@@ -378,7 +376,6 @@ else:
             else:
                 df_u = pd.DataFrame(usuarios)
                 
-                # Renombramos las columnas para que se entienda perfectamente en pantalla
                 columnas_a_renombrar = {
                     "username": "Empleado / Operario", 
                     "empresa": "Empresa / Grupo"
@@ -388,7 +385,6 @@ else:
                     
                 df_u = df_u.rename(columns=columnas_a_renombrar)
                 
-                # Escondemos la columna de la contraseña por seguridad y privacidad
                 if "password_hash" in df_u.columns:
                     df_u = df_u.drop(columns=["password_hash"])
                     
@@ -396,7 +392,6 @@ else:
                 
                 st.divider()
                 st.subheader("🗑️ Dar de baja un usuario")
-                # Excluimos al propio admin de la lista desplegable para evitar que te borres a ti mismo por error
                 opciones_borrar = {f"{u['username'].upper()} (Empresa: {u['empresa'].upper()})": u for u in usuarios if u['username'].lower() != 'admin'}
                 
                 if not opciones_borrar:
@@ -407,13 +402,12 @@ else:
                     
                     st.warning(f"⚠️ ¡Atención! Eliminarás al usuario '{user_a_borrar['username']}'. Esta acción no se puede deshacer.")
                     if st.button("Confirmar Eliminación Definitiva", type="secondary", use_container_width=True):
-                        if eliminar_usuario_en_bd(user_a_borrar['id']):
+                        if eliminar_usuario_en_bd(user_a_borrar['username']):
                             st.success(f"El usuario {user_a_borrar['username']} ha sido eliminado del sistema.")
                             st.rerun()
                             
         with tab_crear_u:
             st.subheader("Crear cuenta corporativa directa")
-            st.write("Utiliza este formulario rápido si quieres dar de alta tú mismo a una empresa cliente sin que tengan que registrarse ellos.")
             adm_user = st.text_input("Usuario corporativo", key="adm_u_reg")
             adm_pass = st.text_input("Contraseña inicial", type="password", key="adm_p_reg")
             adm_emp = st.text_input("Nombre de la Organización / Empresa", key="adm_e_reg")
