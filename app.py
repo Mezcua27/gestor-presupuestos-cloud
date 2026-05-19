@@ -3,10 +3,14 @@ import datetime
 import hashlib
 import io
 import pandas as pd
+import urllib.parse
 
-# 📄 Importaciones para ReportLab (PDFs)
+# 📄 Importaciones para ReportLab (PDFs Avanzados)
+from reportlab.platypus import Paragraph
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors  # 🌟 Esencial para paletas de colores profesionales
 
 # ☁️ Conexión oficial a Supabase
 SUPABASE_URL = "https://aaossliyjhlddjygkhyl.supabase.co"
@@ -54,25 +58,6 @@ def guardar_usuario_en_bd(username, password, empresa):
     except Exception as e: 
         return False, str(e)
 
-# --- 👑 FUNCIONES EXCLUSIVAS DEL ADMIN CONTROL DE USUARIOS ---
-
-def consultar_todos_los_usuarios():
-    try:
-        res = supabase.table("usuarios").select("*").execute()
-        if res.data:
-            return res.data
-        return []
-    except Exception as e:
-        print(f"Error real al traer usuarios: {str(e)}")
-        return []
-
-def eliminar_usuario_en_bd(username_a_borrar):
-    try:
-        supabase.table("usuarios").delete().eq("username", username_a_borrar).execute()
-        return True
-    except:
-        return False
-
 # --- GESTIÓN DE PRODUCTOS ---
 
 def consultar_productos(empresa, username=""):
@@ -113,36 +98,6 @@ def actualizar_producto_en_bd(prod_id, categoria, elemento, marca, precio, unida
     except:
         return False
 
-def actualizar_foto_producto_en_bd(prod_id, url_foto):
-    try:
-        supabase.table("productos").update({"foto_url": url_foto}).eq("id", prod_id).execute()
-        return True
-    except:
-        return False
-
-def eliminar_producto_en_bd(prod_id):
-    try:
-        supabase.table("productos").delete().eq("id", prod_id).execute()
-        return True
-    except:
-        return False
-
-def subir_imagen_a_supabase(file_bytes, file_name):
-    try:
-        bucket_name = "productos-fotos"
-        path_en_bucket = f"foto_{int(datetime.datetime.now().timestamp())}_{file_name}"
-        
-        supabase.storage.from_(bucket_name).upload(
-            path=path_en_bucket,
-            file=file_bytes,
-            file_options={"content-type": "image/jpeg"}
-        )
-        url_publica = supabase.storage.from_(bucket_name).get_public_url(path_en_bucket)
-        return url_publica
-    except Exception as e:
-        st.error(f"Error técnico al subir al almacenamiento: {str(e)}")
-        return None
-
 # --- GESTIÓN DE CLIENTES ---
 
 def consultar_clientes(empresa, username=""):
@@ -174,22 +129,6 @@ def guardar_cliente_en_bd(nombre, telefono, email, empresa):
     except Exception as e: 
         return False, str(e)
 
-def actualizar_cliente_en_bd(cli_id, nombre, telefono, email):
-    try:
-        supabase.table("clientes").update({
-            "nombre": nombre, "telefono": telefono, "email": email
-        }).eq("id", cli_id).execute()
-        return True
-    except:
-        return False
-
-def eliminar_cliente_en_bd(cli_id):
-    try:
-        supabase.table("clientes").delete().eq("id", cli_id).execute()
-        return True
-    except:
-        return False
-
 # --- PRESUPUESTOS Y HISTORIAL ---
 
 def obtener_siguiente_id_presupuesto(empresa):
@@ -199,9 +138,17 @@ def obtener_siguiente_id_presupuesto(empresa):
     except: 
         return "PRE-0001"
 
-def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, empresa):
+def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, descuento, iva_porcentaje, empresa):
     try:
-        supabase.table("budgets").insert({"id_presupuesto": id_presupuesto, "numero_cliente": numero_cliente, "estado": "Pendiente", "empresa": empresa.lower().strip()}).execute()
+        supabase.table("budgets").insert({
+            "id_presupuesto": id_presupuesto, 
+            "numero_cliente": numero_cliente, 
+            "estado": "Pendiente", 
+            "descuento_porcentaje": descuento,
+            "iva_porcentaje": iva_porcentaje,
+            "empresa": empresa.lower().strip()
+        }).execute()
+        
         for item in items:
             supabase.table("detalles_presupuesto").insert({
                 "id_presupuesto": id_presupuesto, 
@@ -217,9 +164,9 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, empresa):
 def consultar_historial_presupuestos(empresa, username=""):
     try:
         if username.lower().strip() == "admin":
-            res = supabase.table("budgets").select("id_presupuesto, estado, empresa, clientes(nombre)").execute()
+            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, empresa, clientes(nombre, telefono, email)").execute()
         else:
-            res = supabase.table("budgets").select("id_presupuesto, estado, clientes(nombre)").eq("empresa", empresa.lower().strip()).execute()
+            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, clientes(nombre, telefono, email)").eq("empresa", empresa.lower().strip()).execute()
         return res.data
     except: 
         return []
@@ -238,102 +185,198 @@ def registrar_envio_presupuesto(id_presupuesto):
 def actualizar_estado_presupuesto(id_presupuesto, nuevo_estado):
     supabase.table("budgets").update({"estado": nuevo_estado}).eq("id_presupuesto", id_presupuesto).execute()
 
-def generar_pdf_bytes(id_presupuesto):
-    from reportlab.platypus import Paragraph
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    
-    res = supabase.table("budgets").select("estado, fecha_envio").eq("id_presupuesto", id_presupuesto).execute()
+# --- 🎨 SISTEMA DE GENERACIÓN DE PDF AVANZADO ---
+def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
+    res = supabase.table("budgets").select("estado, fecha_envio, descuento_porcentaje, iva_porcentaje, clientes(nombre, email, telefono)").eq("id_presupuesto", id_presupuesto).execute()
     if not res.data: 
         return None
-    estado, fecha_envio = res.data[0]["estado"], res.data[0]["fecha_envio"] or "No enviado aún"
+    
+    pres_cabecera = res.data[0]
+    estado = pres_cabecera["estado"]
+    fecha_envio = pres_cabecera["fecha_envio"] or datetime.date.today().strftime("%Y-%m-%d")
+    pct_descuento = float(pres_cabecera.get("descuento_porcentaje", 0) or 0)
+    pct_iva = float(pres_cabecera.get("iva_porcentaje", 21) or 0)
+    info_cliente = pres_cabecera.get("clientes") or {"nombre": "Cliente General", "email": "-", "telefono": "-"}
     
     articulos = consultar_detalles_de_un_presupuesto(id_presupuesto)
     
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
     
-    # 🌟 1. DIBUJAR MARCA DE AGUA (Se dibuja primero para que quede al fondo)
-    pdf.saveState()
-    pdf.setFont("Helvetica-Bold", 34)
-    pdf.setFillColorRGB(0.92, 0.92, 0.92) # Gris muy claro
+    # 🌟 COLOR PALETTE CORPORATIVO
+    COLOR_PRIMARIO = colors.HexColor("#1A365D")   # Azul Oscuro Ejecutivo
+    COLOR_SECUNDARIO = colors.HexColor("#2B6CB0") # Azul Claro Detalles
+    COLOR_TEXTO_DARK = colors.HexColor("#2D3748") # Gris Antracita (Para legibilidad)
+    COLOR_BG_TABLA = colors.HexColor("#EDF2F7")   # Gris Claro para Cabecera de Tabla
     
-    # Nos posicionamos en el centro de la página, rotamos el lienzo 45 grados y escribimos
+    # 🌟 MARCA DE AGUA CORPORATIVA SUTIL
+    pdf.saveState()
+    pdf.setFont("Helvetica-Bold", 38)
+    pdf.setFillColorRGB(0.95, 0.95, 0.95) 
     pdf.translate(300, 420)
     pdf.rotate(45)
-    pdf.drawCentredString(0, 0, "VALIDEZ: 15 DÍAS")
+    pdf.drawCentredString(0, 0, "OFERTA COMERCIAL")
     pdf.restoreState()
     
-    # Configuración inteligente de estilos de celda para evitar solapamientos
-    estilos = getSampleStyleSheet()
-    estilo_celda = ParagraphStyle(
-        'EstiloCeldaPDF',
-        parent=estilos['Normal'],
-        fontName='Helvetica',
-        fontSize=10,
-        leading=12
-    )
+    # 🌟 DISEÑO DE CABECERA AVANZADA (BLOQUE DE COLOR)
+    pdf.setFillColor(COLOR_PRIMARIO)
+    pdf.rect(0, 720, 612, 92, fill=True, stroke=False) # Franja superior completa
     
-    # Encabezado estándar
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(50, 750, "PRESUPUESTO FORMAL")
+    # Texto dentro de la franja superior
+    pdf.setFillColor(colors.white)
+    pdf.setFont("Helvetica-Bold", 22)
+    pdf.drawString(40, 755, nombre_empresa_activa.upper())
     pdf.setFont("Helvetica", 10)
-    pdf.drawString(50, 730, f"Código: {id_presupuesto}")
-    pdf.drawString(50, 715, f"Fecha: {fecha_envio}")
-    pdf.drawString(50, 700, f"Estado: {estado}")
-    pdf.line(50, 685, 550, 685)
+    pdf.setFillColor(colors.HexColor("#E2E8F0"))
+    pdf.drawString(40, 740, "Soluciones Profesionales y Suministros")
     
-    y_superior = 660
+    # Etiqueta destacada del documento
+    pdf.setFillColor(colors.white)
+    pdf.rect(440, 735, 130, 45, fill=True, stroke=False)
+    pdf.setFillColor(COLOR_PRIMARIO)
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawCentredString(505, 760, "PRESUPUESTO")
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(55, 645, "Producto / Elemento")
-    pdf.drawCentredString(290, 645, "Precio U.")
-    pdf.drawCentredString(390, 645, "Cant.")
-    pdf.drawCentredString(495, 645, "Subtotal")
-    pdf.line(50, 635, 550, 635)
+    pdf.setFillColor(COLOR_SECUNDARIO)
+    pdf.drawCentredString(505, 745, id_presupuesto)
     
-    y_pos = 615
-    total_acumulado = 0.0
+    # 🌟 DATOS DE EMISIÓN Y CLIENTE (DOS COLUMNAS LIMPIAS)
+    pdf.setFillColor(COLOR_TEXTO_DARK)
+    
+    # Columna Izquierda: Datos del Presupuesto
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(40, 680, "DATOS DEL DOCUMENTO")
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(40, 665, f"Fecha de Emisión: {fecha_envio}")
+    pdf.drawString(40, 652, f"Vencimiento (15d): {(datetime.datetime.strptime(fecha_envio, '%Y-%m-%d') + datetime.timedelta(days=15)).strftime('%Y-%m-%d')}")
+    pdf.drawString(40, 639, f"Estado Actual: {estado.upper()}")
+    
+    # Columna Derecha: Datos del Cliente
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(320, 680, "DESTINATARIO / CLIENTE")
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(320, 665, f"Razón Social: {info_cliente['nombre']}")
+    pdf.drawString(320, 652, f"Email: {info_cliente['email']}")
+    pdf.drawString(320, 639, f"Teléfono: {info_cliente['telefono']}")
+    
+    # Línea decorativa sutil de separación
+    pdf.setStrokeColor(colors.HexColor("#CBD5E0"))
+    pdf.setLineWidth(0.5)
+    pdf.line(40, 620, 570, 620)
+    
+    # 🌟 TABLA DE ARTÍCULOS ESTILIZADA
+    y_superior = 595
+    pdf.setFillColor(COLOR_BG_TABLA)
+    pdf.rect(40, y_superior, 530, 20, fill=True, stroke=False) # Fondo cabecera tabla
+    
+    pdf.setFillColor(COLOR_PRIMARIO)
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawString(48, y_superior + 6, "DESCRIPCIÓN DEL PRODUCTO / COMPONENTE")
+    pdf.drawCentredString(320, y_superior + 6, "PRECIO U.")
+    pdf.drawCentredString(420, y_superior + 6, "CANTIDAD")
+    pdf.drawCentredString(525, y_superior + 6, "SUBTOTAL")
+    
+    estilos = getSampleStyleSheet()
+    estilo_celda = ParagraphStyle('EstiloCeldaPDF', parent=estilos['Normal'], fontName='Helvetica', fontSize=9, leading=11, textColor=COLOR_TEXTO_DARK)
+    
+    y_pos = y_superior - 20
+    subtotal_acumulado = 0.0
     
     for art in articulos:
         cant_val = art.get('quantity', art.get('cantidad', 1))
-        subtotal = art['precio_cobrado'] * cant_val
-        total_acumulado += subtotal
+        sub_art = art['precio_cobrado'] * cant_val
+        subtotal_acumulado += sub_art
         
-        texto_producto = f"{art['marca_producto']} - {art['modelo_producto']}"
+        # Procesamiento de texto largo en celdas
+        texto_producto = f"**{art['marca_producto']}** - {art['modelo_producto']}"
         p = Paragraph(texto_producto, estilo_celda)
-        
-        ancho_disponible = 175
+        ancho_disponible = 230
         lineas_parrafo = p.wrap(ancho_disponible, 100)
         alto_texto = lineas_parrafo[1]
         
-        if alto_texto > 12:
-            y_pos -= (alto_texto - 12)
+        if alto_texto > 11:
+            y_pos -= (alto_texto - 11)
             
-        p.drawOn(pdf, 55, y_pos)
+        p.drawOn(pdf, 48, y_pos)
         
-        pdf.setFont("Helvetica", 10)
-        pdf.drawCentredString(290, y_pos + 2, f"{art['precio_cobrado']:.2f}€")
-        pdf.drawCentredString(390, y_pos + 2, str(cant_val))
-        pdf.drawCentredString(495, y_pos + 2, f"{subtotal:.2f}€")
+        # Datos numéricos
+        pdf.setFont("Helvetica", 9)
+        pdf.drawCentredString(320, y_pos + 1, f"{art['precio_cobrado']:.2f}€")
+        pdf.drawCentredString(420, y_pos + 1, str(cant_val))
+        pdf.drawCentredString(525, y_pos + 1, f"{sub_art:.2f}€")
         
-        y_pos -= 25
+        # Línea de puntos divisoria sutil por cada fila
+        pdf.setStrokeColor(colors.HexColor("#E2E8F0"))
+        pdf.setLineWidth(0.5)
+        pdf.line(40, y_pos - 6, 570, y_pos - 6)
         
-    y_inferior = y_pos + 15
-    pdf.line(50, y_superior, 550, y_superior)
-    pdf.line(50, y_inferior, 550, y_inferior)
-    pdf.line(50, y_superior, 50, y_inferior)
-    pdf.line(240, y_superior, 240, y_inferior)
-    pdf.line(340, y_superior, 340, y_inferior)
-    pdf.line(440, y_superior, 440, y_inferior)
-    pdf.line(550, y_superior, 550, y_inferior)
+        y_pos -= 22
+        
+    y_inferior = y_pos + 16
     
+    # Enmarcar los bordes laterales de la tabla para limpieza visual
+    pdf.setStrokeColor(colors.HexColor("#CBD5E0"))
+    pdf.line(40, y_superior + 20, 40, y_inferior)
+    pdf.line(570, y_superior + 20, 570, y_inferior)
+    pdf.line(40, y_inferior, 570, y_inferior)
+    
+    # 🌟 BLOQUE DE TOTALES FINALES (DESGLOSE PROFESIONAL)
+    importe_descuento = subtotal_acumulado * (pct_descuento / 100.0)
+    base_imponible = subtotal_acumulado - importe_descuento
+    importe_iva = base_imponible * (pct_iva / 100.0)
+    total_general = base_imponible + importe_iva
+    
+    y_bloque = y_inferior - 25
+    pdf.setFont("Helvetica", 9)
+    pdf.setFillColor(COLOR_TEXTO_DARK)
+    
+    pdf.drawString(360, y_bloque, "Subtotal Bruto:")
+    pdf.drawRightString(560, y_bloque, f"{subtotal_acumulado:.2f} €")
+    
+    if pct_descuento > 0:
+        y_bloque -= 14
+        pdf.setFillColor(colors.HexColor("#C53030")) # Texto rojo sutil para el descuento
+        pdf.drawString(360, y_bloque, f"Descuento Comercial ({pct_descuento:.0f}%):")
+        pdf.drawRightString(560, y_bloque, f"-{importe_descuento:.2f} €")
+        pdf.setFillColor(COLOR_TEXTO_DARK)
+        
+    y_bloque -= 14
+    pdf.drawString(360, y_bloque, "Base Imponible:")
+    pdf.drawRightString(560, y_bloque, f"{base_imponible:.2f} €")
+    
+    y_bloque -= 14
+    pdf.drawString(360, y_bloque, f"I.V.A. Aplicado ({pct_iva:.0f}%):")
+    pdf.drawRightString(560, y_bloque, f"{importe_iva:.2f} €")
+    
+    # Línea divisoria antes del total neto
+    y_bloque -= 10
+    pdf.setStrokeColor(COLOR_PRIMARIO)
+    pdf.setLineWidth(1)
+    pdf.line(360, y_bloque, 570, y_bloque)
+    
+    y_bloque -= 16
     pdf.setFont("Helvetica-Bold", 12)
-    pdf.drawString(340, y_inferior - 20, "TOTAL:")
-    pdf.drawCentredString(495, y_inferior - 20, f"{total_acumulado:.2f} €")
+    pdf.setFillColor(COLOR_PRIMARIO)
+    pdf.drawString(360, y_bloque, "TOTAL NETO:")
+    pdf.drawRightString(560, y_bloque, f"{total_general:.2f} €")
     
-    # 🌟 2. NOTA LEGAL DE VALIDEZ EN EL PIE DE PÁGINA
-    pdf.setFont("Helvetica-Oblique", 8)
-    pdf.setFillColorRGB(0.4, 0.4, 0.4) # Gris oscuro para el texto legal
-    pdf.drawCentredString(300, 40, f"Este presupuesto está sujeto a las condiciones generales de venta. Validez de la oferta: 15 días naturales desde la fecha de emisión ({fecha_envio}).")
+    # 🌟 SECCIÓN DE CONFORMIDAD Y FIRMA (NUEVA)
+    y_firma = y_bloque - 65
+    pdf.setStrokeColor(colors.HexColor("#CBD5E0"))
+    pdf.setLineWidth(0.5)
+    
+    # Cuadro de firma del cliente
+    pdf.line(40, y_firma, 200, y_firma)
+    pdf.setFont("Helvetica", 8)
+    pdf.setFillColor(colors.HexColor("#718096"))
+    pdf.drawString(40, y_firma - 12, "Firma de Conformidad Cliente")
+    pdf.drawString(40, y_firma - 22, "Fecha: ____ / ____ / ________")
+    
+    # Pie de página fijo
+    pdf.setFont("Helvetica-Oblique", 7.5)
+    pdf.setFillColor(colors.HexColor("#A0AEC0")) 
+    pdf.drawCentredString(306, 40, f"Este presupuesto está sujeto a las condiciones generales de servicio de {nombre_empresa_activa.upper()}.")
+    pdf.drawCentredString(306, 28, f"Validez legal de los precios mostrados: 15 días naturales desde su generación ({fecha_envio}).")
     
     pdf.save()
     buffer.seek(0)
@@ -379,327 +422,130 @@ if not st.session_state.autenticado:
         
         if st.button("Registrarme", use_container_width=True):
             exito, error_msg = guardar_usuario_en_bd(user_reg, pass_reg, empresa_reg)
-            if exito:
-                st.success(f"¡Cuenta asignada a la empresa '{empresa_reg.upper()}'! Ya puedes iniciar sesión.")
-            else:
-                st.error(f"No se pudo registrar: {error_msg}")
+            if exito: st.success(f"¡Cuenta asignada a la empresa '{empresa_reg.upper()}'!")
 
 # --- APLICACIÓN PRINCIPAL ---
 else:
     es_admin = st.session_state.usuario.lower().strip() == "admin"
+    opciones_menu = ["🏠 Inicio", "📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"]
     
-    opciones_menu = ["📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"]
-    if es_admin:
-        st.sidebar.title("👑 PANEL ADMINISTRADOR")
-        opciones_menu.insert(0, "👥 Gestión de Usuarios")
-    else:
-        st.sidebar.title(f"🏢 {st.session_state.empresa.upper()}")
-        
-    st.sidebar.caption(f"Usuario activo: {st.session_state.usuario}")
     menu = st.sidebar.radio("Navegación", opciones_menu)
-    
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state.autenticado = False
-        st.session_state.usuario = ""
-        st.session_state.empresa = ""
         st.rerun()
 
-    # --- PANEL DEL ADMINISTRADOR ---
-    if menu == "👥 Gestión de Usuarios" and es_admin:
-        st.title("👥 Control Maestro de Usuarios / Operarios")
-        st.write("Como administrador global, aquí puedes auditar las cuentas de los empleados registradas y gestionar sus accesos.")
+    # --- PANEL DE INICIO ---
+    if menu == "🏠 Inicio":
+        st.title(f"🏠 Panel de Control - {st.session_state.empresa.upper()}")
+        st.subheader("⚠️ Alertas de Validez Comercial (Ofertas de 15 días)")
         
-        tab_lista_u, tab_crear_u = st.tabs(["👁️ Ver Usuarios Activos", "➕ Registrar Nueva Empresa/Usuario"])
+        historial_alertas = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
+        presupuestos_enviados = [h for h in historial_alertas if h["estado"] == "Enviado" and h.get("fecha_envio")]
         
-        with tab_lista_u:
-            usuarios = consultar_todos_los_usuarios()
-            if not usuarios:
-                st.info("No hay cuentas de usuario/empleados registradas en el sistema todavía.")
-            else:
-                df_u = pd.DataFrame(usuarios)
-                columnas_a_renombrar = {
-                    "username": "Empleado / Operario", 
-                    "empresa": "Empresa / Grupo"
-                }
-                if "created_at" in df_u.columns:
-                    columnas_a_renombrar["created_at"] = "Fecha de Alta"
+        if not presupuestos_enviados:
+            st.success("🎉 No tienes ningún presupuesto pendiente de vencimiento.")
+        else:
+            fecha_actual = datetime.date.today()
+            for p in presupuestos_enviados:
+                try:
+                    fecha_envio_obj = datetime.datetime.strptime(p["fecha_envio"], "%Y-%m-%d").date()
+                    dias_restantes = 15 - (fecha_actual - fecha_envio_obj).days
+                    nombre_c = p["clientes"]["nombre"] if p.get("clientes") else "Desconocido"
                     
-                df_u = df_u.rename(columns=columnas_a_renombrar)
-                
-                if "password_hash" in df_u.columns:
-                    df_u = df_u.drop(columns=["password_hash"])
-                    
-                st.dataframe(df_u, use_container_width=True, hide_index=True)
-                
-                st.divider()
-                st.subheader("🗑️ Dar de baja un usuario")
-                opciones_borrar = {f"{u['username'].upper()} (Empresa: {u['empresa'].upper()})": u for u in usuarios if u['username'].lower() != 'admin'}
-                
-                if not opciones_borrar:
-                    st.caption("No hay usuarios externos que borrar.")
-                else:
-                    u_seleccionado = st.selectbox("Selecciona la cuenta que deseas eliminar permanentemente:", list(opciones_borrar.keys()))
-                    user_a_borrar = opciones_borrar[u_seleccionado]
-                    
-                    st.warning(f"⚠️ ¡Atención! Eliminarás al usuario '{user_a_borrar['username']}'. Esta acción no se puede deshacer.")
-                    if st.button("Confirmar Eliminación Definitiva", type="secondary", use_container_width=True):
-                        if eliminar_usuario_en_bd(user_a_borrar['username']):
-                            st.success(f"El usuario {user_a_borrar['username']} ha sido eliminado del sistema.")
-                            st.rerun()
-                            
-        with tab_crear_u:
-            st.subheader("Crear cuenta corporativa directa")
-            adm_user = st.text_input("Usuario corporativo", key="adm_u_reg")
-            adm_pass = st.text_input("Contraseña inicial", type="password", key="adm_p_reg")
-            adm_emp = st.text_input("Nombre de la Organización / Empresa", key="adm_e_reg")
-            
-            if st.button("Dar de alta cuenta", type="primary", use_container_width=True):
-                exito, error_msg = guardar_usuario_en_bd(adm_user, adm_pass, adm_emp)
-                if exito:
-                    st.success(f"¡Empresa '{adm_emp.upper()}' registrada con éxito bajo el usuario '{adm_user}'!")
-                else:
-                    st.error(f"Error al registrar: {error_msg}")
+                    if dias_restantes < 0:
+                        st.error(f"🔴 **{p['id_presupuesto']}** | **{nombre_c}** | HA CADUCADO.")
+                    elif dias_restantes <= 3:
+                        st.warning(f"🚨 **¡Urgente! {p['id_presupuesto']}** | **{nombre_c}** | Quedan {dias_restantes} días.")
+                    else:
+                        st.info(f"✅ **{p['id_presupuesto']}** | **{nombre_c}** | Quedan {dias_restantes} días.")
+                except: pass
 
     # --- SECCIÓN PRODUCTOS ---
     elif menu == "📦 Productos":
         st.title("📦 Gestión del Catálogo de Productos")
-        
-        tab_ver_prod, tab_anadir_prod, tab_importar_excel, tab_editar_prod = st.tabs([
-            "👁️ Ver Catálogo", "➕ Añadir Manual", "📥 Importar desde Excel", "✏️ Modificar / Añadir Fotos"
-        ])
-        
-        with tab_ver_prod:
-            st.subheader("Catálogo Actual")
+        tab_ver, tab_add = st.tabs(["👁️ Ver Catálogo", "➕ Añadir Manual"])
+        with tab_ver:
             lista_p = consultar_productos(st.session_state.empresa, st.session_state.usuario)
-            if lista_p:
-                df_mostrar = pd.DataFrame(lista_p)
-                df_mostrar = df_mostrar.rename(columns={
-                    "categoria": "Categoría", "elemento": "Elemento / Componente", 
-                    "marca_fabricante": "Marca / Fabricante", "precio_unitario": "Precio (€)", 
-                    "unidad_medida": "Unidad", "foto_url": "Enlace Foto"
-                })
-                st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
-            else:
-                st.info("No hay productos registrados en tu catálogo.")
-                
-        with tab_anadir_prod:
-            st.subheader("Registrar nuevo producto a mano")
-            cat = st.text_input("Categoría (Ej: Iluminación)")
-            elem = st.text_input("Elemento / Componente (Ej: Proyector LED)")
-            marca_f = st.text_input("Marca / Fabricante (Ej: Philips)")
-            precio = st.number_input("Precio Unitario (€)", min_value=0.0, step=1.0, key="add_p_precio")
-            unidad = st.selectbox("Unidad de Medida", ["Uds.", "Metros", "Kg", "Horas", "Litros"], key="add_p_unidad")
-            
-            if st.button("Guardar Producto", use_container_width=True):
-                if cat and elem and marca_f:
-                    if guardar_producto_en_bd(cat, elem, marca_f, precio, unidad, st.session_state.empresa):
-                        st.success("¡Producto guardado correctamente!")
-                        st.rerun()
-                else:
-                    st.warning("Por favor, rellena los campos de Categoría, Elemento y Marca.")
-                    
-        with tab_importar_excel:
-            st.subheader("Carga masiva desde archivo Excel")
-            archivo_excel = st.file_uploader("Selecciona tu archivo .xlsx", type=["xlsx"])
-            
-            if archivo_excel is not None:
-                if st.button("🚀 Procesar e Importar todo el Excel", use_container_width=True):
-                    try:
-                        df = pd.read_excel(archivo_excel)
-                        
-                        if not any(col for col in df.columns if "categor" in str(col).lower()):
-                            for i, fila in df.iterrows():
-                                valores_fila = [str(v).lower() for v in fila.values]
-                                if any("categor" in vf for vf in valores_fila):
-                                    df = pd.read_excel(archivo_excel, skiprows=i+1)
-                                    break
-
-                        df.columns = [str(c).strip().lower() for c in df.columns]
-                        
-                        col_cat = next((c for c in df.columns if "categor" in c), None)
-                        col_elem = next((c for c in df.columns if "elemento" in c or "componente" in c), None)
-                        col_marca = next((c for c in df.columns if "marca" in c or "fabricante" in c), None)
-                        col_precio = next((c for c in df.columns if "precio" in c or "eur" in c or "coste" in c), None)
-                        col_unidad = next((c for c in df.columns if "unidad" in c or "medida" in c), None)
-
-                        columnas_faltantes = []
-                        if not col_cat: columnas_faltantes.append("Categoría")
-                        if not col_elem: columnas_faltantes.append("Elemento / Componente")
-                        if not col_marca: columnas_faltantes.append("Marca / Fabricante")
-                        if not col_precio: columnas_faltantes.append("Precio Unitario")
-                        
-                        if columnas_faltantes:
-                            st.error(f"No encuentro estas columnas en tu Excel: {columnas_faltantes}.")
-                        else:
-                            df = df.dropna(subset=[col_cat, col_elem, col_marca])
-                            
-                            contador_exito = 0
-                            for index, fila in df.iterrows():
-                                c_cat = str(fila[col_cat]).strip()
-                                c_elem = str(fila[col_elem]).strip()
-                                c_marca = str(fila[col_marca]).strip()
-                                
-                                try:
-                                    valor_precio = fila[col_precio]
-                                    c_precio = float(valor_precio) if pd.notnull(valor_precio) else 0.0
-                                except:
-                                    c_precio = 0.0
-                                    
-                                c_unidad = str(fila[col_unidad]).strip() if col_unidad and pd.notnull(fila[col_unidad]) else "Uds."
-                                
-                                exito = guardar_producto_en_bd(c_cat, c_elem, c_marca, c_precio, c_unidad, st.session_state.empresa)
-                                if exito:
-                                    contador_exito += 1
-                                    
-                            if contador_exito > 0:
-                                st.success(f"¡Importación masiva completada con éxito! Se han añadido {contador_exito} productos al catálogo.")
-                            else:
-                                st.warning("No se pudo importar ningún producto. Revisa el contenido de las filas.")
-                                
-                    except Exception as err:
-                        st.error(f"Error inesperado al procesar el archivo: {str(err)}")
-                        
-        with tab_editar_prod:
-            st.subheader("Modificar información o añadir foto real")
-            lista_p_edit = consultar_productos(st.session_state.empresa, st.session_state.usuario)
-            if not lista_p_edit:
-                st.info("No hay productos disponibles.")
-            else:
-                opciones_p = {f"[{p['categoria'].upper()}] {p['elemento']} - {p['marca_fabricante']}": p for p in lista_p_edit}
-                p_seleccionado = st.selectbox("Selecciona producto a gestionar", list(opciones_p.keys()))
-                prod_data = opciones_p[p_seleccionado]
-                
-                if prod_data.get("foto_url"):
-                    st.image(prod_data["foto_url"], caption="Foto actual del producto", width=250)
-                
-                imagen_subida = st.file_uploader("Haz una foto o elige de tu galería", type=["jpg", "jpeg", "png"], key=f"foto_{prod_data['id']}")
-                if imagen_subida is not None:
-                    if st.button("📤 Subir y Enlazar Foto", use_container_width=True):
-                        bytes_data = imagen_subida.read()
-                        url_final = subir_imagen_a_supabase(bytes_data, imagen_subida.name)
-                        if url_final and actualizar_foto_producto_en_bd(prod_data['id'], url_final):
-                            st.success("¡Foto guardada y enlazada!")
-                            st.rerun()
-                
-                edit_cat = st.text_input("Modificar Categoría", value=prod_data['categoria'])
-                edit_elem = st.text_input("Modificar Elemento", value=prod_data['elemento'])
-                edit_marca = st.text_input("Modificar Marca/Fabricante", value=prod_data['marca_fabricante'])
-                edit_precio = st.number_input("Modificar Precio (€)", min_value=0.0, value=float(prod_data['precio_unitario']), step=0.5)
-                edit_unidad = st.selectbox("Modificar Unidad", ["Uds.", "Metros", "Kg", "Horas", "Litros"], index=["Uds.", "Metros", "Kg", "Horas", "Litros"].index(prod_data['unidad_medida']))
-                
-                col_btn_p1, col_btn_p2 = st.columns(2)
-                with col_btn_p1:
-                    if st.button("💾 Guardar Cambios de Texto", type="primary", use_container_width=True):
-                        if actualizar_producto_en_bd(prod_data['id'], edit_cat, edit_elem, edit_marca, edit_precio, edit_unidad):
-                            st.success("¡Información actualizada!")
-                            st.rerun()
-                with col_btn_p2:
-                    if st.button("🗑️ Eliminar del Catálogo", type="secondary", use_container_width=True):
-                        if eliminar_producto_en_bd(prod_data['id']):
-                            st.warning("Producto eliminado.")
-                            st.rerun()
+            if lista_p: st.dataframe(lista_p, use_container_width=True, hide_index=True)
+        with tab_add:
+            cat = st.text_input("Categoría")
+            elem = st.text_input("Elemento")
+            marca = st.text_input("Marca")
+            precio = st.number_input("Precio Unitario (€)", min_value=0.0)
+            if st.button("Guardar"):
+                guardar_producto_en_bd(cat, elem, marca, precio, "Uds.", st.session_state.empresa)
+                st.rerun()
 
     # --- SECCIÓN CLIENTES ---
     elif menu == "👥 Clientes":
         st.title("👥 Gestión de Clientes")
-        
-        tab_ver_cli, tab_anadir_cli, tab_editar_cli = st.tabs(["👁️ Ver Clientes", "➕ Añadir Cliente", "✏️ Modificar / Eliminar"])
-        
-        with tab_ver_cli:
-            st.subheader("Lista de Clientes")
-            lista_c = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
-            if lista_c:
-                st.dataframe(lista_c, use_container_width=True, hide_index=True)
-            else:
-                st.info("No hay clientes guardados en tu agenda.")
-                
-        with tab_anadir_cli:
-            st.subheader("Registrar nuevo cliente")
-            nombre = st.text_input("Nombre / Razón Social")
-            telefono = st.text_input("Teléfono de contacto")
-            email = st.text_input("Email de contacto")
-            if st.button("Guardar Cliente", use_container_width=True):
-                if nombre:
-                    exito, error_msg = guardar_cliente_en_bd(nombre, telefono, email, st.session_state.empresa)
-                    if exito:
-                        st.success("Cliente registrado con éxito.")
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {error_msg}")
-                else:
-                    st.warning("El campo Nombre es obligatorio.")
-                    
-        with tab_editar_cli:
-            st.subheader("Modificar o eliminar información de un cliente")
-            lista_c_edit = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
-            if not lista_c_edit:
-                st.info("No hay clientes guardados.")
-            else:
-                if es_admin:
-                    opciones_c = {f"[{c.get('empresa','').upper()}] {c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
-                else:
-                    opciones_c = {f"{c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
-                    
-                c_seleccionado = st.selectbox("Selecciona el cliente a gestionar", list(opciones_c.keys()))
-                cli_data = opciones_c[c_seleccionado]
-                
-                edit_nombre = st.text_input("Modificar Nombre/Empresa", value=cli_data['nombre'])
-                edit_telefono = st.text_input("Modificar Teléfono", value=cli_data['telefono'] or "")
-                edit_email = st.text_input("Modificar Email", value=cli_data['email'] or "")
-                
-                col_btn_c1, col_btn_c2 = st.columns(2)
-                with col_btn_c1:
-                    if st.button("💾 Actualizar Cliente", type="primary", use_container_width=True):
-                        if actualizar_cliente_en_bd(cli_data['id'], edit_nombre, edit_telefono, edit_email):
-                            st.success("¡Información actualizada con éxito!")
-                            st.rerun()
-                with col_btn_c2:
-                    if st.button("🗑️ Eliminar de la Agenda", type="secondary", use_container_width=True):
-                        if eliminar_cliente_en_bd(cli_data['id']):
-                            st.warning("Cliente eliminado permanentemente.")
-                            st.rerun()
+        n = st.text_input("Nombre")
+        t = st.text_input("Teléfono (Ej: 34600112233)")
+        e = st.text_input("Email")
+        if st.button("Guardar Cliente"):
+            guardar_cliente_en_bd(n, t, e, st.session_state.empresa)
+            st.rerun()
+        st.dataframe(consultar_clientes(st.session_state.empresa, st.session_state.usuario), use_container_width=True, hide_index=True)
 
     # --- SECCIÓN NUEVO PRESUPUESTO ---
     elif menu == "✍️ Nuevo Presupuesto":
         st.title("✍️ Generar Presupuesto")
         id_pres = obtener_siguiente_id_presupuesto(st.session_state.empresa)
-        st.info(f"Código Asignado para tu Empresa: **{id_pres}**")
         
         clientes = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
         opciones_clientes = {f"{c['numero_cliente']} - {c['nombre']}": c['numero_cliente'] for c in clientes}
         
-        if not opciones_clientes:
-            st.warning("Primero debes registrar algún cliente en la sección correspondiente.")
-        else:
+        if opciones_clientes:
             cliente_sel = st.selectbox("Selecciona el Cliente", list(opciones_clientes.keys()))
-            
-            st.divider()
             productos = consultar_productos(st.session_state.empresa, st.session_state.usuario)
-            opciones_productos = {f"[{p['categoria']}] {p['elemento']} ({p['marca_fabricante']}) - {p['precio_unitario']}€": p for p in productos}
+            opciones_productos = {f"{p['elemento']} ({p['marca_fabricante']}) - {p['precio_unitario']}€": p for p in productos}
             
-            if not opciones_productos:
-                st.warning("Tu empresa no tiene productos todavía en el catálogo.")
-            else:
-                prod_sel = st.selectbox("Selecciona Producto", list(opciones_productos.keys()))
-                cant = st.number_input("Cantidad", min_value=1, value=1, step=1)
-                
-                if st.button("➕ Añadir artículo"):
+            if opciones_productos:
+                col_p, col_c = st.columns([3, 1])
+                with col_p:
+                    prod_sel = st.selectbox("Selecciona Producto", list(opciones_productos.keys()))
+                with col_c:
+                    cant = st.number_input("Cantidad", min_value=1, value=1)
+                    
+                if st.button("➕ Añadir línea al presupuesto", use_container_width=True):
                     st.session_state.items_presupuesto.append({
                         "elemento": opciones_productos[prod_sel]['elemento'], 
                         "marca_fabricante": opciones_productos[prod_sel]['marca_fabricante'], 
                         "precio": opciones_productos[prod_sel]['precio_unitario'], 
                         "cantidad": cant
                     })
-                    
+                
                 if st.session_state.items_presupuesto:
-                    st.subheader("Líneas del Presupuesto")
+                    st.divider()
+                    st.subheader("Líneas Añadidas")
                     st.dataframe(st.session_state.items_presupuesto, use_container_width=True)
-                    total = sum(i['precio'] * i['cantidad'] for i in st.session_state.items_presupuesto)
-                    st.metric("TOTAL PRESUPUESTADO", f"{total:.2f} €")
                     
-                    if st.button("💾 Guardar y Confirmar Presupuesto", type="primary"):
-                        if guardar_presupuesto_en_bd(id_pres, opciones_clientes[cliente_sel], st.session_state.items_presupuesto, st.session_state.empresa):
-                            st.success(f"Presupuesto {id_pres} guardado.")
+                    subtotal_interfaz = sum(i['precio'] * i['cantidad'] for i in st.session_state.items_presupuesto)
+                    
+                    st.divider()
+                    st.subheader("⚙️ Configuración Fiscal y Comercial")
+                    
+                    col_desc, col_iva = st.columns(2)
+                    with col_desc:
+                        descuento_global = st.number_input("Descuento Comercial Global (%)", min_value=0, max_value=100, value=0, step=1)
+                    with col_iva:
+                        tipo_iva = st.selectbox("Tipo de I.V.A. Aplicable", [21, 10, 4, 0], format_func=lambda x: f"General ({x}%)" if x == 21 else (f"Reducido ({x}%)" if x > 0 else "Exento (0%)"))
+                    
+                    total_descuento_ui = subtotal_interfaz * (descuento_global / 100.0)
+                    base_imponible_ui = subtotal_interfaz - total_descuento_ui
+                    total_iva_ui = base_imponible_ui * (tipo_iva / 100.0)
+                    total_neto_ui = base_imponible_ui + total_iva_ui
+                    
+                    st.markdown("### 📊 Resumen Económico")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Subtotal Bruto", f"{subtotal_interfaz:.2f} €")
+                    c2.metric("Descuento", f"-{total_descuento_ui:.2f} €" if descuento_global > 0 else "0.00 €")
+                    c3.metric("Base Imponible", f"{base_imponible_ui:.2f} €")
+                    c4.metric("TOTAL NETO", f"{total_neto_ui:.2f} €")
+                    
+                    if st.button("💾 Guardar y Confirmar Presupuesto", type="primary", use_container_width=True):
+                        if guardar_presupuesto_en_bd(id_pres, opciones_clientes[cliente_sel], st.session_state.items_presupuesto, descuento_global, tipo_iva, st.session_state.empresa):
+                            st.success(f"¡Presupuesto {id_pres} registrado correctamente!")
                             st.session_state.items_presupuesto = []
                             st.rerun()
 
@@ -709,44 +555,58 @@ else:
         historial = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
         
         datos_tabla = []
+        mapeo_completo = {}
+        
         for h in historial:
-            item_tabla = {
-                "Código": h["id_presupuesto"],
-                "Cliente": h["clientes"]["nombre"] if h.get("clientes") else "Desconocido",
-                "Estado": h["estado"]
-            }
-            if es_admin:
-                item_tabla["Empresa"] = h.get("empresa", "Desconocida").upper()
-                
+            cod = h["id_presupuesto"]
+            cli_info = h.get("clientes") or {}
+            nombre_c = cli_info.get("nombre", "Desconocido")
+            
+            item_tabla = {"Código": cod, "Cliente": nombre_c, "Estado": h["estado"]}
             datos_tabla.append(item_tabla)
             
-        if not datos_tabla:
-            st.info("No hay presupuestos creados por tu empresa todavía.")
-        else:
-            st.dataframe(datos_tabla, use_container_width=True)
-            codigos = [d["Código"] for d in datos_tabla]
-            id_sel = st.selectbox("Selecciona un código para gestionar o descargar PDF:", codigos)
+            mapeo_completo[cod] = {
+                "nombre": nombre_c,
+                "telefono": cli_info.get("telefono", ""),
+                "email": cli_info.get("email", ""),
+                "desc": float(h.get("descuento_porcentaje", 0) or 0),
+                "iva": float(h.get("iva_porcentaje", 21) or 0)
+            }
+            
+        if datos_tabla:
+            st.dataframe(datos_tabla, use_container_width=True, hide_index=True)
+            id_sel = st.selectbox("Selecciona código:", [d["Código"] for d in datos_tabla])
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                if st.button("✉️ Marcar Enviado", use_container_width=True):
-                    registrar_envio_presupuesto(id_sel)
-                    st.rerun()
+                if st.button("✉️ Marcar Enviado", use_container_width=True): registrar_envio_presupuesto(id_sel); st.rerun()
             with col2:
-                if st.button("✔️ Aceptar", use_container_width=True):
-                    actualizar_estado_presupuesto(id_sel, "Aceptado")
-                    st.rerun()
+                if st.button("✔️ Aceptar", use_container_width=True): actualizar_estado_presupuesto(id_sel, "Aceptado"); st.rerun()
             with col3:
-                if st.button("❌ Rechazar", use_container_width=True):
-                    actualizar_estado_presupuesto(id_sel, "Rechazado")
-                    st.rerun()
-                        
-            pdf_data = generar_pdf_bytes(id_sel)
+                if st.button("❌ Rechazar", use_container_width=True): actualizar_estado_presupuesto(id_sel, "Rechazado"); st.rerun()
+            
+            st.divider()
+            datos_c_sel = mapeo_completo[id_sel]
+            articulos_p = consultar_detalles_de_un_presupuesto(id_sel)
+            
+            sub_calc = sum(art['precio_cobrado'] * art.get('quantity', art.get('cantidad', 1)) for art in articulos_p)
+            base_calc = sub_calc - (sub_calc * (datos_c_sel["desc"] / 100.0))
+            total_calc = base_calc + (base_calc * (datos_c_sel["iva"] / 100.0))
+            
+            # 🌟 Inyección del nombre de la empresa activa para el membrete dinámico
+            pdf_data = generar_pdf_bytes(id_sel, st.session_state.empresa)
             if pdf_data:
-                st.download_button(
-                    label="📥 Descargar PDF Oficial",
-                    data=pdf_data,
-                    file_name=f"Presupuesto_{id_sel}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+                st.download_button(label="📥 Descargar PDF Ejecutivo Diseñado", data=pdf_data, file_name=f"Presupuesto_Diseñado_{id_sel}.pdf", mime="application/pdf", use_container_width=True)
+            
+            col_wa, col_em = st.columns(2)
+            with col_wa:
+                tel = str(datos_c_sel["telefono"]).strip()
+                if tel and tel != "None":
+                    msg = f"Hola *{datos_c_sel['nombre']}*.\n\nTe adjunto el presupuesto *{id_sel}* por un importe total de *{total_calc:.2f}€* (I.V.A. incluido).\n\nValidez de la oferta: 15 días."
+                    st.link_button("🟢 Enviar por WhatsApp", f"https://wa.me/{tel}?text={urllib.parse.quote(msg)}", use_container_width=True)
+            with col_em:
+                email = str(datos_c_sel["email"]).strip()
+                if email and email != "None":
+                    asunto = f"Presupuesto {id_sel} - {st.session_state.empresa.upper()}"
+                    cuerpo = f"Estimado/a {datos_c_sel['nombre']},\n\nLe hacemos entrega del presupuesto solicitado {id_sel} por un importe total de {total_calc:.2f}€ (I.V.A. incluido)."
+                    st.link_button("🔵 Preparar Email", f"mailto:{email}?subject={urllib.parse.quote(asunto)}&body={urllib.parse.quote(cuerpo)}", use_container_width=True)
