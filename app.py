@@ -239,7 +239,6 @@ def actualizar_estado_presupuesto(id_presupuesto, nuevo_estado):
     supabase.table("budgets").update({"estado": nuevo_estado}).eq("id_presupuesto", id_presupuesto).execute()
 
 def generar_pdf_bytes(id_presupuesto):
-    # 📄 Importaciones necesarias para el empaquetado de celdas largas en ReportLab
     from reportlab.platypus import Paragraph
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     
@@ -253,6 +252,17 @@ def generar_pdf_bytes(id_presupuesto):
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
     
+    # 🌟 1. DIBUJAR MARCA DE AGUA (Se dibuja primero para que quede al fondo)
+    pdf.saveState()
+    pdf.setFont("Helvetica-Bold", 34)
+    pdf.setFillColorRGB(0.92, 0.92, 0.92) # Gris muy claro
+    
+    # Nos posicionamos en el centro de la página, rotamos el lienzo 45 grados y escribimos
+    pdf.translate(300, 420)
+    pdf.rotate(45)
+    pdf.drawCentredString(0, 0, "VALIDEZ: 15 DÍAS")
+    pdf.restoreState()
+    
     # Configuración inteligente de estilos de celda para evitar solapamientos
     estilos = getSampleStyleSheet()
     estilo_celda = ParagraphStyle(
@@ -263,6 +273,7 @@ def generar_pdf_bytes(id_presupuesto):
         leading=12
     )
     
+    # Encabezado estándar
     pdf.setFont("Helvetica-Bold", 16)
     pdf.drawString(50, 750, "PRESUPUESTO FORMAL")
     pdf.setFont("Helvetica", 10)
@@ -287,7 +298,6 @@ def generar_pdf_bytes(id_presupuesto):
         subtotal = art['precio_cobrado'] * cant_val
         total_acumulado += subtotal
         
-        # Formateamos como un párrafo protegido para activar el salto automático si es largo
         texto_producto = f"{art['marca_producto']} - {art['modelo_producto']}"
         p = Paragraph(texto_producto, estilo_celda)
         
@@ -319,8 +329,13 @@ def generar_pdf_bytes(id_presupuesto):
     pdf.setFont("Helvetica-Bold", 12)
     pdf.drawString(340, y_inferior - 20, "TOTAL:")
     pdf.drawCentredString(495, y_inferior - 20, f"{total_acumulado:.2f} €")
-    pdf.save()
     
+    # 🌟 2. NOTA LEGAL DE VALIDEZ EN EL PIE DE PÁGINA
+    pdf.setFont("Helvetica-Oblique", 8)
+    pdf.setFillColorRGB(0.4, 0.4, 0.4) # Gris oscuro para el texto legal
+    pdf.drawCentredString(300, 40, f"Este presupuesto está sujeto a las condiciones generales de venta. Validez de la oferta: 15 días naturales desde la fecha de emisión ({fecha_envio}).")
+    
+    pdf.save()
     buffer.seek(0)
     return buffer
 
