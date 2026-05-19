@@ -53,9 +53,13 @@ def guardar_usuario_en_bd(username, password, empresa):
     except Exception as e: 
         return False, str(e)
 
-def consultar_productos(empresa):
+def consultar_productos(empresa, username=""):
     try:
-        res = supabase.table("productos").select("marca, modelo, precio_unitario, unidad_medida").eq("empresa", empresa).execute()
+        # 👑 Si es admin global, ve TODOS los productos con su columna empresa
+        if username.lower().strip() == "admin":
+            res = supabase.table("productos").select("marca, modelo, precio_unitario, unidad_medida, empresa").execute()
+        else:
+            res = supabase.table("productos").select("marca, modelo, precio_unitario, unidad_medida").eq("empresa", empresa).execute()
         return res.data
     except: 
         return []
@@ -69,9 +73,13 @@ def guardar_producto_en_bd(marca, modelo, precio, unidad, empresa):
     except: 
         return False
 
-def consultar_clientes(empresa):
+def consultar_clientes(empresa, username=""):
     try:
-        res = supabase.table("clientes").select("*").eq("empresa", empresa.lower().strip()).execute()
+        # 👑 Si es admin global, ve TODOS los clientes de la plataforma
+        if username.lower().strip() == "admin":
+            res = supabase.table("clientes").select("*").execute()
+        else:
+            res = supabase.table("clientes").select("*").eq("empresa", empresa.lower().strip()).execute()
         return res.data
     except: 
         return []
@@ -113,9 +121,13 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, empresa):
     except: 
         return False
 
-def consultar_historial_presupuestos(empresa):
+def consultar_historial_presupuestos(empresa, username=""):
     try:
-        res = supabase.table("budgets").select("id_presupuesto, estado, clientes(nombre)").eq("empresa", empresa.lower().strip()).execute()
+        # 👑 Si es admin global, ve el historial completo de todas las empresas
+        if username.lower().strip() == "admin":
+            res = supabase.table("budgets").select("id_presupuesto, estado, empresa, clientes(nombre)").execute()
+        else:
+            res = supabase.table("budgets").select("id_presupuesto, estado, clientes(nombre)").eq("empresa", empresa.lower().strip()).execute()
         return res.data
     except: 
         return []
@@ -165,7 +177,6 @@ def generar_pdf_bytes(id_presupuesto):
     total_acumulado = 0.0
     pdf.setFont("Helvetica", 10)
     for art in articulos:
-        # Se mapea 'quantity' si la columna vino renombrada o 'cantidad' por defecto
         cant_val = art.get('quantity', art.get('cantidad', 1))
         subtotal = art['precio_cobrado'] * cant_val
         total_acumulado += subtotal
@@ -239,7 +250,12 @@ if not st.session_state.autenticado:
 
 # --- APLICACIÓN PRINCIPAL ---
 else:
-    st.sidebar.title(f"🏢 {st.session_state.empresa.upper()}")
+    # Si es el admin global cambiamos visualmente el título del menú lateral
+    if st.session_state.usuario.lower().strip() == "admin":
+        st.sidebar.title("👑 PANEL ADMINISTRADOR")
+    else:
+        st.sidebar.title(f"🏢 {st.session_state.empresa.upper()}")
+        
     st.sidebar.caption(f"Usuario activo: {st.session_state.usuario}")
     menu = st.sidebar.radio("Navegación", ["📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"])
     
@@ -263,8 +279,8 @@ else:
                     st.success("Producto guardado en el catálogo de tu empresa.")
                     st.rerun()
                     
-        st.subheader("Catálogo de tu Empresa")
-        st.dataframe(consultar_productos(st.session_state.empresa), use_container_width=True)
+        st.subheader("Catálogo Global/Empresa")
+        st.dataframe(consultar_productos(st.session_state.empresa, st.session_state.usuario), use_container_width=True)
 
     # --- SECCIÓN CLIENTES ---
     elif menu == "👥 Clientes":
@@ -283,7 +299,7 @@ else:
                         st.error(f"Error de Supabase: {error_msg}")
                     
         st.subheader("Lista de Clientes")
-        st.dataframe(consultar_clientes(st.session_state.empresa), use_container_width=True)
+        st.dataframe(consultar_clientes(st.session_state.empresa, st.session_state.usuario), use_container_width=True)
 
     # --- SECCIÓN NUEVO PRESUPUESTO ---
     elif menu == "✍️ Nuevo Presupuesto":
@@ -291,7 +307,7 @@ else:
         id_pres = obtener_siguiente_id_presupuesto(st.session_state.empresa)
         st.info(f"Código Asignado para tu Empresa: **{id_pres}**")
         
-        clientes = consultar_clientes(st.session_state.empresa)
+        clientes = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
         opciones_clientes = {f"{c['numero_cliente']} - {c['nombre']}": c['numero_cliente'] for c in clientes}
         
         if not opciones_clientes:
@@ -300,7 +316,7 @@ else:
             cliente_sel = st.selectbox("Selecciona el Cliente", list(opciones_clientes.keys()))
             
             st.divider()
-            productos = consultar_productos(st.session_state.empresa)
+            productos = consultar_productos(st.session_state.empresa, st.session_state.usuario)
             opciones_productos = {f"{p['marca']} {p['modelo']} ({p['precio_unitario']}€)": p for p in productos}
             
             if not opciones_productos:
@@ -330,15 +346,20 @@ else:
     # --- SECCIÓN HISTORIAL ---
     elif menu == "📜 Historial":
         st.title("📜 Historial de Presupuestos")
-        historial = consultar_historial_presupuestos(st.session_state.empresa)
+        historial = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
         
         datos_tabla = []
         for h in historial:
-            datos_tabla.append({
+            item_tabla = {
                 "Código": h["id_presupuesto"],
                 "Cliente": h["clientes"]["nombre"] if h.get("clientes") else "Desconocido",
                 "Estado": h["estado"]
-            })
+            }
+            # Si somos el admin, añadimos visualmente la columna para ver de qué empresa es cada fila
+            if st.session_state.usuario.lower().strip() == "admin":
+                item_tabla["Empresa"] = h.get("empresa", "Desconocida").upper()
+                
+            datos_tabla.append(item_tabla)
             
         if not datos_tabla:
             st.info("No hay presupuestos creados por tu empresa todavía.")
