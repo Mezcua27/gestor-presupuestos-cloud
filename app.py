@@ -59,10 +59,13 @@ def guardar_usuario_en_bd(username, password, empresa):
 
 def consultar_todos_los_usuarios():
     try:
-        # Trae la lista de todos los usuarios registrados en el sistema
-        res = supabase.table("usuarios").select("id, username, empresa, creado_en:created_at").execute()
-        return res.data
-    except:
+        # Traemos TODOS los usuarios registrados en el software de golpe, sin importar su empresa
+        res = supabase.table("usuarios").select("*").execute()
+        if res.data:
+            return res.data
+        return []
+    except Exception as e:
+        print(f"Error real al traer usuarios: {str(e)}")
         return []
 
 def eliminar_usuario_en_bd(user_id):
@@ -371,15 +374,29 @@ else:
         with tab_lista_u:
             usuarios = consultar_todos_los_usuarios()
             if not usuarios:
-                st.info("No hay usuarios registrados aparte del administrador.")
+                st.info("No hay cuentas de usuario/empleados registradas en el sistema todavía.")
             else:
                 df_u = pd.DataFrame(usuarios)
-                df_u = df_u.rename(columns={"username": "Nombre de Usuario", "empresa": "Empresa Asignada", "creado_en": "Fecha de Registro"})
+                
+                # Renombramos las columnas para que se entienda perfectamente en pantalla
+                columnas_a_renombrar = {
+                    "username": "Empleado / Operario", 
+                    "empresa": "Empresa / Grupo"
+                }
+                if "created_at" in df_u.columns:
+                    columnas_a_renombrar["created_at"] = "Fecha de Alta"
+                    
+                df_u = df_u.rename(columns=columnas_a_renombrar)
+                
+                # Escondemos la columna de la contraseña por seguridad y privacidad
+                if "password_hash" in df_u.columns:
+                    df_u = df_u.drop(columns=["password_hash"])
+                    
                 st.dataframe(df_u, use_container_width=True, hide_index=True)
                 
                 st.divider()
                 st.subheader("🗑️ Dar de baja un usuario")
-                # Excluimos al propio admin de la lista para no autoborrarse por error
+                # Excluimos al propio admin de la lista desplegable para evitar que te borres a ti mismo por error
                 opciones_borrar = {f"{u['username'].upper()} (Empresa: {u['empresa'].upper()})": u for u in usuarios if u['username'].lower() != 'admin'}
                 
                 if not opciones_borrar:
