@@ -60,7 +60,6 @@ def consultar_productos(empresa, username=""):
         if username.lower().strip() == "admin":
             res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida, empresa").execute()
         else:
-            # 🔧 Corregido: Ahora siempre trae el 'id' para que los usuarios puedan editar/borrar
             res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida").eq("empresa", empresa).execute()
         return res.data
     except: 
@@ -98,7 +97,6 @@ def consultar_clientes(empresa, username=""):
         if username.lower().strip() == "admin":
             res = supabase.table("clientes").select("id, numero_cliente, nombre, telefono, email, empresa").execute()
         else:
-            # 🔧 Corregido: Ahora también pedimos el 'id' para evitar el KeyError
             res = supabase.table("clientes").select("id, numero_cliente, nombre, telefono, email").eq("empresa", empresa.lower().strip()).execute()
         return res.data
     except: 
@@ -107,7 +105,8 @@ def consultar_clientes(empresa, username=""):
 def guardar_cliente_en_bd(nombre, telefono, email, empresa):
     try:
         empresa_limpia = empresa.lower().strip()
-        actuales = consultar_clientes(empresa_limpia)
+        # 🔧 Corregido: Pasamos la empresa limpia para contar correctamente los clientes existentes de este negocio
+        actuales = consultar_clientes(empresa_limpia, username="")
         siguiente_num = len(actuales) + 1
         num_cliente = f"CLI-{siguiente_num:04d}"
         
@@ -489,25 +488,3 @@ else:
             id_sel = st.selectbox("Selecciona un código para gestionar o descargar PDF:", codigos)
             
             col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button("✉️ Marcar Enviado", use_container_width=True):
-                    registrar_envio_presupuesto(id_sel)
-                    st.rerun()
-            with col2:
-                if st.button("✔️ Aceptar", use_container_width=True):
-                    actualizar_estado_presupuesto(id_sel, "Aceptado")
-                    st.rerun()
-            with col3:
-                if st.button("❌ Rechazar", use_container_width=True):
-                    actualizar_estado_presupuesto(id_sel, "Rechazado")
-                    st.rerun()
-                        
-            pdf_data = generar_pdf_bytes(id_sel)
-            if pdf_data:
-                st.download_button(
-                    label="📥 Descargar PDF Oficial",
-                    data=pdf_data,
-                    file_name=f"Presupuesto_{id_sel}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
