@@ -58,7 +58,6 @@ def guardar_usuario_en_bd(username, password, empresa):
 
 def consultar_todos_los_usuarios():
     try:
-        # Traemos TODOS los usuarios registrados sin importar su empresa ni alias raros
         res = supabase.table("usuarios").select("*").execute()
         if res.data:
             return res.data
@@ -69,7 +68,6 @@ def consultar_todos_los_usuarios():
 
 def eliminar_usuario_en_bd(username_a_borrar):
     try:
-        # Eliminamos de forma segura buscando por el nombre de usuario único
         supabase.table("usuarios").delete().eq("username", username_a_borrar).execute()
         return True
     except:
@@ -241,6 +239,10 @@ def actualizar_estado_presupuesto(id_presupuesto, nuevo_estado):
     supabase.table("budgets").update({"estado": nuevo_estado}).eq("id_presupuesto", id_presupuesto).execute()
 
 def generar_pdf_bytes(id_presupuesto):
+    # 📄 Importaciones necesarias para el empaquetado de celdas largas en ReportLab
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    
     res = supabase.table("budgets").select("estado, fecha_envio").eq("id_presupuesto", id_presupuesto).execute()
     if not res.data: 
         return None
@@ -250,6 +252,16 @@ def generar_pdf_bytes(id_presupuesto):
     
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
+    
+    # Configuración inteligente de estilos de celda para evitar solapamientos
+    estilos = getSampleStyleSheet()
+    estilo_celda = ParagraphStyle(
+        'EstiloCeldaPDF',
+        parent=estilos['Normal'],
+        fontName='Helvetica',
+        fontSize=10,
+        leading=12
+    )
     
     pdf.setFont("Helvetica-Bold", 16)
     pdf.drawString(50, 750, "PRESUPUESTO FORMAL")
@@ -269,16 +281,31 @@ def generar_pdf_bytes(id_presupuesto):
     
     y_pos = 615
     total_acumulado = 0.0
-    pdf.setFont("Helvetica", 10)
+    
     for art in articulos:
         cant_val = art.get('quantity', art.get('cantidad', 1))
         subtotal = art['precio_cobrado'] * cant_val
         total_acumulado += subtotal
-        pdf.drawString(55, y_pos, f"{art['marca_producto']} - {art['modelo_producto']}")
-        pdf.drawCentredString(290, y_pos, f"{art['precio_cobrado']:.2f}€")
-        pdf.drawCentredString(390, y_pos, str(cant_val))
-        pdf.drawCentredString(495, y_pos, f"{subtotal:.2f}€")
-        y_pos -= 20
+        
+        # Formateamos como un párrafo protegido para activar el salto automático si es largo
+        texto_producto = f"{art['marca_producto']} - {art['modelo_producto']}"
+        p = Paragraph(texto_producto, estilo_celda)
+        
+        ancho_disponible = 175
+        lineas_parrafo = p.wrap(ancho_disponible, 100)
+        alto_texto = lineas_parrafo[1]
+        
+        if alto_texto > 12:
+            y_pos -= (alto_texto - 12)
+            
+        p.drawOn(pdf, 55, y_pos)
+        
+        pdf.setFont("Helvetica", 10)
+        pdf.drawCentredString(290, y_pos + 2, f"{art['precio_cobrado']:.2f}€")
+        pdf.drawCentredString(390, y_pos + 2, str(cant_val))
+        pdf.drawCentredString(495, y_pos + 2, f"{subtotal:.2f}€")
+        
+        y_pos -= 25
         
     y_inferior = y_pos + 15
     pdf.line(50, y_superior, 550, y_superior)
@@ -346,7 +373,6 @@ if not st.session_state.autenticado:
 else:
     es_admin = st.session_state.usuario.lower().strip() == "admin"
     
-    # ⚙️ Menú dinámico según si es Admin o un usuario de empresa normal
     opciones_menu = ["📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"]
     if es_admin:
         st.sidebar.title("👑 PANEL ADMINISTRADOR")
@@ -363,7 +389,7 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- 👑 SECCIÓN EXCLUSIVA: GESTIÓN DE OPERARIOS/USUARIOS (SÓLO ADMIN) ---
+    # --- PANEL DEL ADMINISTRADOR ---
     if menu == "👥 Gestión de Usuarios" and es_admin:
         st.title("👥 Control Maestro de Usuarios / Operarios")
         st.write("Como administrador global, aquí puedes auditar las cuentas de los empleados registradas y gestionar sus accesos.")
@@ -376,8 +402,6 @@ else:
                 st.info("No hay cuentas de usuario/empleados registradas en el sistema todavía.")
             else:
                 df_u = pd.DataFrame(usuarios)
-                
-                # Renombramos para que se vea claro en el panel de control
                 columnas_a_renombrar = {
                     "username": "Empleado / Operario", 
                     "empresa": "Empresa / Grupo"
@@ -387,7 +411,6 @@ else:
                     
                 df_u = df_u.rename(columns=columnas_a_renombrar)
                 
-                # Ocultamos la contraseña hash por obvias razones de seguridad
                 if "password_hash" in df_u.columns:
                     df_u = df_u.drop(columns=["password_hash"])
                     
@@ -395,7 +418,6 @@ else:
                 
                 st.divider()
                 st.subheader("🗑️ Dar de baja un usuario")
-                # Excluimos al admin de las opciones para no autoborrarse
                 opciones_borrar = {f"{u['username'].upper()} (Empresa: {u['empresa'].upper()})": u for u in usuarios if u['username'].lower() != 'admin'}
                 
                 if not opciones_borrar:
@@ -406,14 +428,12 @@ else:
                     
                     st.warning(f"⚠️ ¡Atención! Eliminarás al usuario '{user_a_borrar['username']}'. Esta acción no se puede deshacer.")
                     if st.button("Confirmar Eliminación Definitiva", type="secondary", use_container_width=True):
-                        # Eliminamos por username para blindar el borrado si no hay clave ID estándar
                         if eliminar_usuario_en_bd(user_a_borrar['username']):
                             st.success(f"El usuario {user_a_borrar['username']} ha sido eliminado del sistema.")
                             st.rerun()
                             
         with tab_crear_u:
             st.subheader("Crear cuenta corporativa directa")
-            st.write("Utiliza este formulario si quieres dar de alta tú mismo a un empleado/organización sin que tengan que registrarse desde fuera.")
             adm_user = st.text_input("Usuario corporativo", key="adm_u_reg")
             adm_pass = st.text_input("Contraseña inicial", type="password", key="adm_p_reg")
             adm_emp = st.text_input("Nombre de la Organización / Empresa", key="adm_e_reg")
@@ -465,7 +485,6 @@ else:
                     
         with tab_importar_excel:
             st.subheader("Carga masiva desde archivo Excel")
-            st.write("Sube tu archivo Excel. El sistema buscará las columnas automáticamente.")
             archivo_excel = st.file_uploader("Selecciona tu archivo .xlsx", type=["xlsx"])
             
             if archivo_excel is not None:
@@ -473,7 +492,6 @@ else:
                     try:
                         df = pd.read_excel(archivo_excel)
                         
-                        # Si los títulos reales estaban más abajo, buscamos automáticamente la cabecera
                         if not any(col for col in df.columns if "categor" in str(col).lower()):
                             for i, fila in df.iterrows():
                                 valores_fila = [str(v).lower() for v in fila.values]
@@ -481,17 +499,14 @@ else:
                                     df = pd.read_excel(archivo_excel, skiprows=i+1)
                                     break
 
-                        # Limpiamos los nombres de las columnas a minúsculas
                         df.columns = [str(c).strip().lower() for c in df.columns]
                         
-                        # Mapeo inteligente por palabras clave (Flexible a tildes, mayúsculas y símbolos)
                         col_cat = next((c for c in df.columns if "categor" in c), None)
                         col_elem = next((c for c in df.columns if "elemento" in c or "componente" in c), None)
                         col_marca = next((c for c in df.columns if "marca" in c or "fabricante" in c), None)
                         col_precio = next((c for c in df.columns if "precio" in c or "eur" in c or "coste" in c), None)
                         col_unidad = next((c for c in df.columns if "unidad" in c or "medida" in c), None)
 
-                        # Validación amigable de campos
                         columnas_faltantes = []
                         if not col_cat: columnas_faltantes.append("Categoría")
                         if not col_elem: columnas_faltantes.append("Elemento / Componente")
@@ -499,9 +514,8 @@ else:
                         if not col_precio: columnas_faltantes.append("Precio Unitario")
                         
                         if columnas_faltantes:
-                            st.error(f"No encuentro estas columnas en tu Excel: {columnas_faltantes}. Por favor, comprueba los nombres de la cabecera.")
+                            st.error(f"No encuentro estas columnas en tu Excel: {columnas_faltantes}.")
                         else:
-                            # Limpiamos las celdas vacías de las filas críticas
                             df = df.dropna(subset=[col_cat, col_elem, col_marca])
                             
                             contador_exito = 0
@@ -510,7 +524,6 @@ else:
                                 c_elem = str(fila[col_elem]).strip()
                                 c_marca = str(fila[col_marca]).strip()
                                 
-                                # Extraemos el precio con salvavidas por si viene como texto
                                 try:
                                     valor_precio = fila[col_precio]
                                     c_precio = float(valor_precio) if pd.notnull(valor_precio) else 0.0
@@ -523,11 +536,10 @@ else:
                                 if exito:
                                     contador_exito += 1
                                     
-                            # Mensaje fijo y visible sin recarga inmediata brusca
                             if contador_exito > 0:
                                 st.success(f"¡Importación masiva completada con éxito! Se han añadido {contador_exito} productos al catálogo.")
                             else:
-                                st.warning("No se pudo importar ningún producto. Revisa si las filas de tu Excel estaban vacías o mal formateadas.")
+                                st.warning("No se pudo importar ningún producto. Revisa el contenido de las filas.")
                                 
                     except Exception as err:
                         st.error(f"Error inesperado al procesar el archivo: {str(err)}")
@@ -657,11 +669,10 @@ else:
                 cant = st.number_input("Cantidad", min_value=1, value=1, step=1)
                 
                 if st.button("➕ Añadir artículo"):
-                    p_data = opciones_productos[prod_sel]
                     st.session_state.items_presupuesto.append({
-                        "elemento": p_data['elemento'], 
-                        "marca_fabricante": p_data['marca_fabricante'], 
-                        "precio": p_data['precio_unitario'], 
+                        "elemento": opciones_productos[prod_sel]['elemento'], 
+                        "marca_fabricante": opciones_productos[prod_sel]['marca_fabricante'], 
+                        "precio": opciones_productos[prod_sel]['precio_unitario'], 
                         "cantidad": cant
                     })
                     
