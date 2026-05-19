@@ -285,7 +285,9 @@ if not st.session_state.autenticado:
 
 # --- APLICACIÓN PRINCIPAL ---
 else:
-    if st.session_state.usuario.lower().strip() == "admin":
+    es_admin = st.session_state.usuario.lower().strip() == "admin"
+    
+    if es_admin:
         st.sidebar.title("👑 PANEL ADMINISTRADOR")
     else:
         st.sidebar.title(f"🏢 {st.session_state.empresa.upper()}")
@@ -299,7 +301,7 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- SECCIÓN PRODUCTOS (CON EDITOR) ---
+    # --- SECCIÓN PRODUCTOS (CON EDITOR Y ADMIN COMPATIBLE) ---
     if menu == "📦 Productos":
         st.title("📦 Gestión de Productos")
         
@@ -311,7 +313,7 @@ else:
             if lista_p:
                 st.dataframe(lista_p, use_container_width=True, hide_index=True)
             else:
-                st.info("No hay productos registrados en el catálogo.")
+                st.info("No hay productos registrados.")
                 
         with tab_anadir_prod:
             st.subheader("Registrar nuevo producto")
@@ -333,11 +335,15 @@ else:
             if not lista_p_edit:
                 st.info("No hay productos para modificar.")
             else:
-                opciones_p = {f"{p['marca']} {p['modelo']}": p for p in lista_p_edit}
+                # Si somos el admin, añadimos la empresa entre corchetes para saber a quién pertenece
+                if es_admin:
+                    opciones_p = {f"[{p.get('empresa','').upper()}] {p['marca']} {p['modelo']}": p for p in lista_p_edit}
+                else:
+                    opciones_p = {f"{p['marca']} {p['modelo']}": p for p in lista_p_edit}
+                    
                 p_seleccionado = st.selectbox("Selecciona el producto a editar", list(opciones_p.keys()))
                 prod_data = opciones_p[p_seleccionado]
                 
-                # Campos rellenos con los datos actuales
                 edit_marca = st.text_input("Modificar Marca", value=prod_data['marca'])
                 edit_modelo = st.text_input("Modificar Modelo", value=prod_data['modelo'])
                 edit_precio = st.number_input("Modificar Precio (€)", min_value=0.0, value=float(prod_data['precio_unitario']), step=0.5)
@@ -355,7 +361,7 @@ else:
                             st.warning("Producto eliminado del catálogo.")
                             st.rerun()
 
-    # --- SECCIÓN CLIENTES (CON EDITOR) ---
+    # --- SECCIÓN CLIENTES (CON EDITOR Y ADMIN COMPATIBLE) ---
     elif menu == "👥 Clientes":
         st.title("👥 Gestión de Clientes")
         
@@ -391,11 +397,14 @@ else:
             if not lista_c_edit:
                 st.info("No hay clientes guardados.")
             else:
-                opciones_c = {f"{c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
+                if es_admin:
+                    opciones_c = {f"[{c.get('empresa','').upper()}] {c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
+                else:
+                    opciones_c = {f"{c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
+                    
                 c_seleccionado = st.selectbox("Selecciona el cliente a gestionar", list(opciones_c.keys()))
                 cli_data = opciones_c[c_seleccionado]
                 
-                # Campos cargados con la info actual
                 edit_nombre = st.text_input("Modificar Nombre/Empresa", value=cli_data['nombre'])
                 edit_telefono = st.text_input("Modificar Teléfono", value=cli_data['telefono'] or "")
                 edit_email = st.text_input("Modificar Email", value=cli_data['email'] or "")
@@ -466,7 +475,7 @@ else:
                 "Cliente": h["clientes"]["nombre"] if h.get("clientes") else "Desconocido",
                 "Estado": h["estado"]
             }
-            if st.session_state.usuario.lower().strip() == "admin":
+            if es_admin:
                 item_tabla["Empresa"] = h.get("empresa", "Desconocida").upper()
                 
             datos_tabla.append(item_tabla)
