@@ -60,6 +60,7 @@ def consultar_productos(empresa, username=""):
         if username.lower().strip() == "admin":
             res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida, empresa").execute()
         else:
+            # 🔧 Corregido: Ahora siempre trae el 'id' para que los usuarios puedan editar/borrar
             res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida").eq("empresa", empresa).execute()
         return res.data
     except: 
@@ -95,9 +96,10 @@ def eliminar_producto_en_bd(prod_id):
 def consultar_clientes(empresa, username=""):
     try:
         if username.lower().strip() == "admin":
-            res = supabase.table("clientes").select("*").execute()
+            res = supabase.table("clientes").select("id, numero_cliente, nombre, telefono, email, empresa").execute()
         else:
-            res = supabase.table("clientes").select("*").eq("empresa", empresa.lower().strip()).execute()
+            # 🔧 Corregido: Ahora también pedimos el 'id' para evitar el KeyError
+            res = supabase.table("clientes").select("id, numero_cliente, nombre, telefono, email").eq("empresa", empresa.lower().strip()).execute()
         return res.data
     except: 
         return []
@@ -301,7 +303,7 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- SECCIÓN PRODUCTOS (CON EDITOR Y ADMIN COMPATIBLE) ---
+    # --- SECCIÓN PRODUCTOS ---
     if menu == "📦 Productos":
         st.title("📦 Gestión de Productos")
         
@@ -335,7 +337,6 @@ else:
             if not lista_p_edit:
                 st.info("No hay productos para modificar.")
             else:
-                # Si somos el admin, añadimos la empresa entre corchetes para saber a quién pertenece
                 if es_admin:
                     opciones_p = {f"[{p.get('empresa','').upper()}] {p['marca']} {p['modelo']}": p for p in lista_p_edit}
                 else:
@@ -361,7 +362,7 @@ else:
                             st.warning("Producto eliminado del catálogo.")
                             st.rerun()
 
-    # --- SECCIÓN CLIENTES (CON EDITOR Y ADMIN COMPATIBLE) ---
+    # --- SECCIÓN CLIENTES ---
     elif menu == "👥 Clientes":
         st.title("👥 Gestión de Clientes")
         
