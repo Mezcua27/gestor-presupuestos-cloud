@@ -53,13 +53,14 @@ def guardar_usuario_en_bd(username, password, empresa):
     except Exception as e: 
         return False, str(e)
 
+# --- GESTIÓN DE PRODUCTOS ---
+
 def consultar_productos(empresa, username=""):
     try:
-        # 👑 Si es admin global, ve TODOS los productos con su columna empresa
         if username.lower().strip() == "admin":
-            res = supabase.table("productos").select("marca, modelo, precio_unitario, unidad_medida, empresa").execute()
+            res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida, empresa").execute()
         else:
-            res = supabase.table("productos").select("marca, modelo, precio_unitario, unidad_medida").eq("empresa", empresa).execute()
+            res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida").eq("empresa", empresa).execute()
         return res.data
     except: 
         return []
@@ -73,9 +74,26 @@ def guardar_producto_en_bd(marca, modelo, precio, unidad, empresa):
     except: 
         return False
 
+def actualizar_producto_en_bd(prod_id, marca, modelo, precio, unidad):
+    try:
+        supabase.table("productos").update({
+            "marca": marca, "modelo": modelo, "precio_unitario": precio, "unidad_medida": unidad
+        }).eq("id", prod_id).execute()
+        return True
+    except:
+        return False
+
+def eliminar_producto_en_bd(prod_id):
+    try:
+        supabase.table("productos").delete().eq("id", prod_id).execute()
+        return True
+    except:
+        return False
+
+# --- GESTIÓN DE CLIENTES ---
+
 def consultar_clientes(empresa, username=""):
     try:
-        # 👑 Si es admin global, ve TODOS los clientes de la plataforma
         if username.lower().strip() == "admin":
             res = supabase.table("clientes").select("*").execute()
         else:
@@ -102,6 +120,24 @@ def guardar_cliente_en_bd(nombre, telefono, email, empresa):
     except Exception as e: 
         return False, str(e)
 
+def actualizar_cliente_en_bd(cli_id, nombre, telefono, email):
+    try:
+        supabase.table("clientes").update({
+            "nombre": nombre, "telefono": telefono, "email": email
+        }).eq("id", cli_id).execute()
+        return True
+    except:
+        return False
+
+def eliminar_cliente_en_bd(cli_id):
+    try:
+        supabase.table("clientes").delete().eq("id", cli_id).execute()
+        return True
+    except:
+        return False
+
+# --- PRESUPUESTOS Y HISTORIAL ---
+
 def obtener_siguiente_id_presupuesto(empresa):
     try:
         res = supabase.table("budgets").select("count", count="exact").eq("empresa", empresa.lower().strip()).execute()
@@ -123,7 +159,6 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, empresa):
 
 def consultar_historial_presupuestos(empresa, username=""):
     try:
-        # 👑 Si es admin global, ve el historial completo de todas las empresas
         if username.lower().strip() == "admin":
             res = supabase.table("budgets").select("id_presupuesto, estado, empresa, clientes(nombre)").execute()
         else:
@@ -250,7 +285,6 @@ if not st.session_state.autenticado:
 
 # --- APLICACIÓN PRINCIPAL ---
 else:
-    # Si es el admin global cambiamos visualmente el título del menú lateral
     if st.session_state.usuario.lower().strip() == "admin":
         st.sidebar.title("👑 PANEL ADMINISTRADOR")
     else:
@@ -265,41 +299,118 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- SECCIÓN PRODUCTOS ---
+    # --- SECCIÓN PRODUCTOS (CON EDITOR) ---
     if menu == "📦 Productos":
         st.title("📦 Gestión de Productos")
-        with st.expander("➕ Añadir Nuevo Producto"):
+        
+        tab_ver_prod, tab_anadir_prod, tab_editar_prod = st.tabs(["👁️ Ver Catálogo", "➕ Añadir Producto", "✏️ Modificar / Eliminar"])
+        
+        with tab_ver_prod:
+            st.subheader("Catálogo Actual")
+            lista_p = consultar_productos(st.session_state.empresa, st.session_state.usuario)
+            if lista_p:
+                st.dataframe(lista_p, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay productos registrados en el catálogo.")
+                
+        with tab_anadir_prod:
+            st.subheader("Registrar nuevo producto")
             marca = st.text_input("Marca")
             modelo = st.text_input("Modelo")
-            precio = st.number_input("Precio (€)", min_value=0.0, step=1.0)
-            unidad = st.selectbox("Unidad", ["Uds.", "Metros", "Kg"])
-            if st.button("Guardar Producto"):
+            precio = st.number_input("Precio (€)", min_value=0.0, step=1.0, key="add_p_precio")
+            unidad = st.selectbox("Unidad", ["Uds.", "Metros", "Kg"], key="add_p_unidad")
+            if st.button("Guardar Producto", use_container_width=True):
                 if marca and modelo:
                     guardar_producto_en_bd(marca, modelo, precio, unidad, st.session_state.empresa)
-                    st.success("Producto guardado en el catálogo de tu empresa.")
+                    st.success("Producto guardado correctamente.")
                     st.rerun()
+                else:
+                    st.warning("Completa la marca y el modelo.")
                     
-        st.subheader("Catálogo Global/Empresa")
-        st.dataframe(consultar_productos(st.session_state.empresa, st.session_state.usuario), use_container_width=True)
+        with tab_editar_prod:
+            st.subheader("Modificar o eliminar un producto existente")
+            lista_p_edit = consultar_productos(st.session_state.empresa, st.session_state.usuario)
+            if not lista_p_edit:
+                st.info("No hay productos para modificar.")
+            else:
+                opciones_p = {f"{p['marca']} {p['modelo']}": p for p in lista_p_edit}
+                p_seleccionado = st.selectbox("Selecciona el producto a editar", list(opciones_p.keys()))
+                prod_data = opciones_p[p_seleccionado]
+                
+                # Campos rellenos con los datos actuales
+                edit_marca = st.text_input("Modificar Marca", value=prod_data['marca'])
+                edit_modelo = st.text_input("Modificar Modelo", value=prod_data['modelo'])
+                edit_precio = st.number_input("Modificar Precio (€)", min_value=0.0, value=float(prod_data['precio_unitario']), step=0.5)
+                edit_unidad = st.selectbox("Modificar Unidad", ["Uds.", "Metros", "Kg"], index=["Uds.", "Metros", "Kg"].index(prod_data['unidad_medida']))
+                
+                col_btn_p1, col_btn_p2 = st.columns(2)
+                with col_btn_p1:
+                    if st.button("💾 Guardar Cambios", type="primary", use_container_width=True):
+                        if actualizar_producto_en_bd(prod_data['id'], edit_marca, edit_modelo, edit_precio, edit_unidad):
+                            st.success("¡Producto actualizado!")
+                            st.rerun()
+                with col_btn_p2:
+                    if st.button("🗑️ Eliminar Producto", type="secondary", use_container_width=True):
+                        if eliminar_producto_en_bd(prod_data['id']):
+                            st.warning("Producto eliminado del catálogo.")
+                            st.rerun()
 
-    # --- SECCIÓN CLIENTES ---
+    # --- SECCIÓN CLIENTES (CON EDITOR) ---
     elif menu == "👥 Clientes":
         st.title("👥 Gestión de Clientes")
-        with st.expander("➕ Registrar Nuevo Cliente"):
-            nombre = st.text_input("Nombre / Empresa")
-            telefono = st.text_input("Teléfono")
-            email = st.text_input("Email")
-            if st.button("Guardar Cliente"):
+        
+        tab_ver_cli, tab_anadir_cli, tab_editar_cli = st.tabs(["👁️ Ver Clientes", "➕ Añadir Cliente", "✏️ Modificar / Eliminar"])
+        
+        with tab_ver_cli:
+            st.subheader("Lista de Clientes")
+            lista_c = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
+            if lista_c:
+                st.dataframe(lista_c, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay clientes guardados en tu agenda.")
+                
+        with tab_anadir_cli:
+            st.subheader("Registrar nuevo cliente")
+            nombre = st.text_input("Nombre / Razón Social")
+            telefono = st.text_input("Teléfono de contacto")
+            email = st.text_input("Email de contacto")
+            if st.button("Guardar Cliente", use_container_width=True):
                 if nombre:
                     exito, error_msg = guardar_cliente_en_bd(nombre, telefono, email, st.session_state.empresa)
                     if exito:
-                        st.success("Cliente guardado en tu zona privada.")
+                        st.success("Cliente registrado con éxito.")
                         st.rerun()
                     else:
-                        st.error(f"Error de Supabase: {error_msg}")
+                        st.error(f"Error: {error_msg}")
+                else:
+                    st.warning("El campo Nombre es obligatorio.")
                     
-        st.subheader("Lista de Clientes")
-        st.dataframe(consultar_clientes(st.session_state.empresa, st.session_state.usuario), use_container_width=True)
+        with tab_editar_cli:
+            st.subheader("Modificar o eliminar información de un cliente")
+            lista_c_edit = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
+            if not lista_c_edit:
+                st.info("No hay clientes guardados.")
+            else:
+                opciones_c = {f"{c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
+                c_seleccionado = st.selectbox("Selecciona el cliente a gestionar", list(opciones_c.keys()))
+                cli_data = opciones_c[c_seleccionado]
+                
+                # Campos cargados con la info actual
+                edit_nombre = st.text_input("Modificar Nombre/Empresa", value=cli_data['nombre'])
+                edit_telefono = st.text_input("Modificar Teléfono", value=cli_data['telefono'] or "")
+                edit_email = st.text_input("Modificar Email", value=cli_data['email'] or "")
+                
+                col_btn_c1, col_btn_c2 = st.columns(2)
+                with col_btn_c1:
+                    if st.button("💾 Actualizar Cliente", type="primary", use_container_width=True):
+                        if actualizar_cliente_en_bd(cli_data['id'], edit_nombre, edit_telefono, edit_email):
+                            st.success("¡Información actualizada con éxito!")
+                            st.rerun()
+                with col_btn_c2:
+                    if st.button("🗑️ Eliminar de la Agenda", type="secondary", use_container_width=True):
+                        if eliminar_cliente_en_bd(cli_data['id']):
+                            st.warning("Cliente eliminado permanentemente.")
+                            st.rerun()
 
     # --- SECCIÓN NUEVO PRESUPUESTO ---
     elif menu == "✍️ Nuevo Presupuesto":
@@ -355,7 +466,6 @@ else:
                 "Cliente": h["clientes"]["nombre"] if h.get("clientes") else "Desconocido",
                 "Estado": h["estado"]
             }
-            # Si somos el admin, añadimos visualmente la columna para ver de qué empresa es cada fila
             if st.session_state.usuario.lower().strip() == "admin":
                 item_tabla["Empresa"] = h.get("empresa", "Desconocida").upper()
                 
