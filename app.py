@@ -224,10 +224,23 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, descuento, 
 def consultar_historial_presupuestos(empresa, username=""):
     try:
         if username.lower().strip() == "admin":
-            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, empresa, clientes(nombre, telefono, email)").execute()
+            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, numero_cliente, empresa").execute()
         else:
-            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, clientes(nombre, telefono, email)").eq("empresa", empresa.lower().strip()).execute()
-        return res.data if res.data else []
+            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, numero_cliente").eq("empresa", empresa.lower().strip()).execute()
+        
+        presupuestos = res.data if res.data else []
+        
+        if presupuestos:
+            res_clientes = supabase.table("clientes").select("numero_cliente, nombre, telefono, email").execute()
+            dict_clientes = {c["numero_cliente"]: c for c in res_clientes.data} if res_clientes.data else {}
+            
+            for p in presupuestos:
+                num_c = p.get("numero_cliente")
+                if num_c in dict_clientes:
+                    p["clientes"] = dict_clientes[num_c]
+                else:
+                    p["clientes"] = {"nombre": "Cliente General", "telefono": "No registrado", "email": "-"}
+        return presupuestos
     except: 
         return []
 
@@ -247,7 +260,7 @@ def actualizar_estado_presupuesto(id_presupuesto, nuevo_estado):
 
 # --- 🎨 GENERACIÓN DE PDF CORPORATIVO PREMIUM ---
 def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
-    res = supabase.table("budgets").select("estado, fecha_envio, descuento_porcentaje, iva_porcentaje, clientes(nombre, email, telefono)").eq("id_presupuesto", id_presupuesto).execute()
+    res = supabase.table("budgets").select("estado, fecha_envio, descuento_porcentaje, iva_porcentaje, numero_cliente").eq("id_presupuesto", id_presupuesto).execute()
     if not res.data: return None
     
     pres_cabecera = res.data[0]
@@ -255,7 +268,9 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     fecha_envio = pres_cabecera["fecha_envio"] or datetime.date.today().strftime("%Y-%m-%d")
     pct_descuento = float(pres_cabecera.get("descuento_porcentaje", 0) or 0)
     pct_iva = float(pres_cabecera.get("iva_porcentaje", 21) or 0)
-    info_cliente = pres_cabecera.get("clientes") or {"nombre": "Cliente General", "email": "-", "telefono": "-"}
+    
+    res_c = supabase.table("clientes").select("nombre, email, telefono").eq("numero_cliente", pres_cabecera.get("numero_cliente")).execute()
+    info_cliente = res_c.data[0] if res_c.data else {"nombre": "Cliente General", "email": "-", "telefono": "-"}
     
     articulos = consultar_detalles_de_un_presupuesto(id_presupuesto)
     buffer = io.BytesIO()
@@ -266,7 +281,6 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     COLOR_TEXTO_DARK = colors.HexColor("#2D3748")
     COLOR_BG_TABLA = colors.HexColor("#EDF2F7")
     
-    # Marca de agua sutil
     pdf.saveState()
     pdf.setFont("Helvetica-Bold", 38)
     pdf.setFillColorRGB(0.95, 0.95, 0.95)
@@ -275,7 +289,6 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     pdf.drawCentredString(0, 0, "OFERTA COMERCIAL")
     pdf.restoreState()
     
-    # Bloque superior de color corporativo
     pdf.setFillColor(COLOR_PRIMARIO)
     pdf.rect(0, 720, 612, 92, fill=True, stroke=False)
     pdf.setFillColor(colors.white)
@@ -285,7 +298,6 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     pdf.setFillColor(colors.HexColor("#E2E8F0"))
     pdf.drawString(40, 740, "Soluciones Profesionales y Suministros")
     
-    # Recuadro de ID Presupuesto
     pdf.setFillColor(colors.white)
     pdf.rect(440, 735, 130, 45, fill=True, stroke=False)
     pdf.setFillColor(COLOR_PRIMARIO)
@@ -295,7 +307,6 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     pdf.setFillColor(COLOR_SECUNDARIO)
     pdf.drawCentredString(505, 745, id_presupuesto)
     
-    # Bloques de datos Emisor e Info Cliente
     pdf.setFillColor(COLOR_TEXTO_DARK)
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawString(40, 680, "DATOS DEL DOCUMENTO")
@@ -315,7 +326,6 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     pdf.setLineWidth(0.5)
     pdf.line(40, 620, 570, 620)
     
-    # Cabecera de la tabla
     y_superior = 595
     pdf.setFillColor(COLOR_BG_TABLA)
     pdf.rect(40, y_superior, 530, 20, fill=True, stroke=False)
@@ -362,7 +372,6 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     pdf.line(570, y_superior + 20, 570, y_inferior)
     pdf.line(40, y_inferior, 570, y_inferior)
     
-    # Bloque de Desglose Fiscal
     importe_descuento = subtotal_acumulado * (pct_descuento / 100.0)
     base_imponible = subtotal_acumulado - importe_descuento
     importe_iva = base_imponible * (pct_iva / 100.0)
@@ -401,7 +410,6 @@ def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
     pdf.drawString(360, y_bloque, "TOTAL NETO:")
     pdf.drawRightString(560, y_bloque, f"{total_general:.2f} €")
     
-    # Firma
     y_firma = y_bloque - 65
     pdf.setStrokeColor(colors.HexColor("#CBD5E0"))
     pdf.setLineWidth(0.5)
@@ -435,7 +443,6 @@ if "empresa" not in st.session_state:
 if "items_presupuesto" not in st.session_state:
     st.session_state.items_presupuesto = []
 
-# --- PANTALLA DE ACCESO ---
 if not st.session_state.autenticado:
     st.title("☁️ Acceso Multi-Empresa")
     pestana_login, pestana_registro = st.tabs(["🔑 Iniciar Sesión", "🚀 Crear Cuenta"])
@@ -465,7 +472,6 @@ if not st.session_state.autenticado:
             else:
                 st.error(f"No se pudo registrar: {error_msg}")
 
-# --- APLICACIÓN PRINCIPAL ---
 else:
     es_admin = st.session_state.usuario.lower().strip() == "admin"
     opciones_menu = ["🏠 Inicio", "📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"]
@@ -482,7 +488,6 @@ else:
         st.session_state.autenticado = False
         st.rerun()
 
-    # --- PANEL DE INICIO / ALERTAS ---
     if menu == "🏠 Inicio":
         st.title(f"🏠 Panel de Control - {st.session_state.empresa.upper()}")
         st.write("Seguimiento comercial y control de vencimientos automáticos.")
@@ -509,7 +514,6 @@ else:
                         st.info(f"✅ **{p['id_presupuesto']}** | **{nombre_c}** | Quedan {dias_restantes} días activos.")
                 except: pass
 
-    # --- 👑 PANEL EXCLUSIVO CONTROL DE USUARIOS (RECUPERADO) ---
     elif menu == "👥 Gestión de Usuarios" and es_admin:
         st.title("👥 Control Maestro de Usuarios / Operarios")
         tab_lista_u, tab_borrar_u = st.tabs(["👁️ Ver Usuarios Activos", "❌ Dar de Baja Cuenta"])
@@ -534,7 +538,6 @@ else:
             else:
                 st.info("No hay cuentas operarias que puedan ser borradas.")
 
-    # --- SECCIÓN PRODUCTOS (CON EXCEL Y FOTOS RECUPERADOS) ---
     elif menu == "📦 Productos":
         st.title("📦 Gestión del Catálogo de Productos")
         tab_ver_p, tab_add_p, tab_excel_p, tab_fotos_p = st.tabs(["👁️ Ver Catálogo", "➕ Añadir Manual", "📥 Importar desde Excel", "✏️ Modificar / Fotos"])
@@ -608,7 +611,6 @@ else:
                         eliminar_producto_en_bd(prod_data['id'])
                         st.rerun()
 
-    # --- SECCIÓN CLIENTES (CON EDICIÓN Y BORRADO RECUPERADOS) ---
     elif menu == "👥 Clientes":
         st.title("👥 Gestión de Clientes")
         tab_v_cli, tab_e_cli = st.tabs(["👁️ Directorio", "✏️ Crear / Modificar Clientes"])
@@ -647,7 +649,6 @@ else:
                         eliminar_cliente_en_bd(cli_data['id'])
                         st.rerun()
 
-    # --- SECCIÓN NUEVO PRESUPUESTO ---
     elif menu == "✍️ Nuevo Presupuesto":
         st.title("✍️ Generar Presupuesto Comercial")
         id_pres = obtener_siguiente_id_presupuesto(st.session_state.empresa)
@@ -704,32 +705,33 @@ else:
                             st.session_state.items_presupuesto = []
                             st.rerun()
 
-    # --- SECCIÓN HISTORIAL (CON ENVÍO POR WHATSAPP Y EMAIL) ---
     elif menu == "📜 Historial":
         st.title("📜 Historial de Presupuestos")
         historial = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
         
-        datos_tabla = []
-        mapeo_completo = {}
-        
-        for h in historial:
-            cod = h["id_presupuesto"]
-            cli_info = h.get("clientes") or {}
-            nombre_c = cli_info.get("nombre", "Desconocido")
+        if not historial:
+            st.info("Aún no se han registrado presupuestos para esta empresa.")
+        else:
+            datos_tabla = []
+            mapeo_completo = {}
             
-            item_tabla = {"Código": cod, "Cliente": nombre_c, "Estado": h["estado"]}
-            if es_admin: item_tabla["Empresa"] = h.get("empresa", "").upper()
-            datos_tabla.append(item_tabla)
-            
-            mapeo_completo[cod] = {
-                "nombre": nombre_c,
-                "telefono": cli_info.get("telefono", ""),
-                "email": cli_info.get("email", ""),
-                "desc": float(h.get("descuento_porcentaje", 0) or 0),
-                "iva": float(h.get("iva_porcentaje", 21) or 0)
-            }
-            
-        if datos_tabla:
+            for h in historial:
+                cod = h["id_presupuesto"]
+                cli_info = h.get("clientes") or {"nombre": "Desconocido"}
+                nombre_c = cli_info.get("nombre", "Desconocido")
+                
+                item_tabla = {"Código": cod, "Cliente": nombre_c, "Estado": h["estado"]}
+                if es_admin: item_tabla["Empresa"] = h.get("empresa", "").upper()
+                datos_tabla.append(item_tabla)
+                
+                mapeo_completo[cod] = {
+                    "nombre": nombre_c,
+                    "telefono": cli_info.get("telefono", ""),
+                    "email": cli_info.get("email", ""),
+                    "desc": float(h.get("descuento_porcentaje", 0) or 0),
+                    "iva": float(h.get("iva_porcentaje", 21) or 0)
+                }
+                
             st.dataframe(datos_tabla, use_container_width=True, hide_index=True)
             id_sel = st.selectbox("Selecciona un código para gestionar o enviar:", [d["Código"] for d in datos_tabla])
             
@@ -756,13 +758,13 @@ else:
             col_wa, col_em = st.columns(2)
             with col_wa:
                 tel = str(datos_c_sel["telefono"]).strip()
-                if tel and tel != "None":
+                if tel and tel != "None" and tel != "No registrado":
                     msg = f"Hola *{datos_c_sel['nombre']}*.\n\nTe adjunto el presupuesto *{id_sel}* por un importe total de *{total_calc:.2f}€* (I.V.A. incluido).\n\nValidez de la oferta: 15 días."
                     st.link_button("🟢 Enviar por WhatsApp", f"https://wa.me/{tel}?text={urllib.parse.quote(msg)}", use_container_width=True)
                 else: st.button("🟢 Falta Teléfono Cliente", disabled=True, use_container_width=True)
             with col_em:
                 email = str(datos_c_sel["email"]).strip()
-                if email and email != "None":
+                if email and email != "None" and email != "-":
                     asunto = f"Presupuesto {id_sel} - {st.session_state.empresa.upper()}"
                     cuerpo = f"Estimado/a {datos_c_sel['nombre']},\n\nLe hacemos entrega del presupuesto solicitado con código {id_sel} por un importe total de {total_calc:.2f}€ (I.V.A. incluido)."
                     st.link_button("🔵 Preparar Email", f"mailto:{email}?subject={urllib.parse.quote(asunto)}&body={urllib.parse.quote(cuerpo)}", use_container_width=True)
