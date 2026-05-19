@@ -1,8 +1,9 @@
+import streamlit as pd
 import streamlit as st
 import datetime
 import hashlib
 import io
-import pandas as pd  # Para procesar el Excel masivo
+import pandas as pd
 
 # 📄 Importaciones para ReportLab (PDFs)
 from reportlab.pdfgen import canvas
@@ -54,7 +55,24 @@ def guardar_usuario_en_bd(username, password, empresa):
     except Exception as e: 
         return False, str(e)
 
-# --- GESTIÓN DE PRODUCTOS NUEVA ESTRUCTURA ---
+# --- 👑 FUNCIONES EXCLUSIVAS DEL ADMIN CONTROL DE USUARIOS ---
+
+def consultar_todos_los_usuarios():
+    try:
+        # Trae la lista de todos los usuarios registrados en el sistema
+        res = supabase.table("usuarios").select("id, username, empresa, creado_en:created_at").execute()
+        return res.data
+    except:
+        return []
+
+def eliminar_usuario_en_bd(user_id):
+    try:
+        supabase.table("usuarios").delete().eq("id", user_id).execute()
+        return True
+    except:
+        return False
+
+# --- GESTIÓN DE PRODUCTOS ---
 
 def consultar_productos(empresa, username=""):
     try:
@@ -110,7 +128,6 @@ def eliminar_producto_en_bd(prod_id):
 
 def subir_imagen_a_supabase(file_bytes, file_name):
     try:
-        # Subimos el archivo al bucket público 'productos-fotos'
         bucket_name = "productos-fotos"
         path_en_bucket = f"foto_{int(datetime.datetime.now().timestamp())}_{file_name}"
         
@@ -119,8 +136,6 @@ def subir_imagen_a_supabase(file_bytes, file_name):
             file=file_bytes,
             file_options={"content-type": "image/jpeg"}
         )
-        
-        # Obtenemos la URL pública del archivo subido
         url_publica = supabase.storage.from_(bucket_name).get_public_url(path_en_bucket)
         return url_publica
     except Exception as e:
@@ -189,7 +204,7 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, empresa):
         for item in items:
             supabase.table("detalles_presupuesto").insert({
                 "id_presupuesto": id_presupuesto, 
-                "marca_producto": item['elemento'],  # Mapeado temporal para compatibilidad
+                "marca_producto": item['elemento'], 
                 "modelo_producto": item['marca_fabricante'],
                 "precio_cobrado": item['precio'], 
                 "cantidad": item['cantidad']
@@ -328,13 +343,17 @@ if not st.session_state.autenticado:
 else:
     es_admin = st.session_state.usuario.lower().strip() == "admin"
     
+    # ⚙️ Menú dinámico según si es Admin o un usuario normal
+    opciones_menu = ["📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"]
     if es_admin:
         st.sidebar.title("👑 PANEL ADMINISTRADOR")
+        # Inyectamos el control de usuarios arriba del todo para el Admin
+        opciones_menu.insert(0, "👥 Gestión de Usuarios")
     else:
         st.sidebar.title(f"🏢 {st.session_state.empresa.upper()}")
         
     st.sidebar.caption(f"Usuario activo: {st.session_state.usuario}")
-    menu = st.sidebar.radio("Navegación", ["📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"])
+    menu = st.sidebar.radio("Navegación", opciones_menu)
     
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state.autenticado = False
@@ -342,8 +361,55 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- SECCIÓN PRODUCTOS (ADAPTADA CON FOTOS E IMPORTADOR) ---
-    if menu == "📦 Productos":
+    # --- 👑 NUEVA SECCIÓN EXCLUSIVA: GESTIÓN DE USUARIOS (SÓLO ADMIN) ---
+    if menu == "👥 Gestión de Usuarios" and es_admin:
+        st.title("👥 Control Maestro de Usuarios")
+        st.write("Como administrador global, aquí puedes auditar las cuentas registradas y gestionar sus accesos.")
+        
+        tab_lista_u, tab_crear_u = st.tabs(["👁️ Ver Usuarios Activos", "➕ Registrar Nueva Empresa/Usuario"])
+        
+        with tab_lista_u:
+            usuarios = consultar_todos_los_usuarios()
+            if not usuarios:
+                st.info("No hay usuarios registrados aparte del administrador.")
+            else:
+                df_u = pd.DataFrame(usuarios)
+                df_u = df_u.rename(columns={"username": "Nombre de Usuario", "empresa": "Empresa Asignada", "creado_en": "Fecha de Registro"})
+                st.dataframe(df_u, use_container_width=True, hide_index=True)
+                
+                st.divider()
+                st.subheader("🗑️ Dar de baja un usuario")
+                # Excluimos al propio admin de la lista para no autoborrarse por error
+                opciones_borrar = {f"{u['username'].upper()} (Empresa: {u['empresa'].upper()})": u for u in usuarios if u['username'].lower() != 'admin'}
+                
+                if not opciones_borrar:
+                    st.caption("No hay usuarios externos que borrar.")
+                else:
+                    u_seleccionado = st.selectbox("Selecciona la cuenta que deseas eliminar permanentemente:", list(opciones_borrar.keys()))
+                    user_a_borrar = opciones_borrar[u_seleccionado]
+                    
+                    st.warning(f"⚠️ ¡Atención! Eliminarás al usuario '{user_a_borrar['username']}'. Esta acción no se puede deshacer.")
+                    if st.button("Confirmar Eliminación Definitiva", type="secondary", use_container_width=True):
+                        if eliminar_usuario_en_bd(user_a_borrar['id']):
+                            st.success(f"El usuario {user_a_borrar['username']} ha sido eliminado del sistema.")
+                            st.rerun()
+                            
+        with tab_crear_u:
+            st.subheader("Crear cuenta corporativa directa")
+            st.write("Utiliza este formulario rápido si quieres dar de alta tú mismo a una empresa cliente sin que tengan que registrarse ellos.")
+            adm_user = st.text_input("Usuario corporativo", key="adm_u_reg")
+            adm_pass = st.text_input("Contraseña inicial", type="password", key="adm_p_reg")
+            adm_emp = st.text_input("Nombre de la Organización / Empresa", key="adm_e_reg")
+            
+            if st.button("Dar de alta cuenta", type="primary", use_container_width=True):
+                exito, error_msg = guardar_usuario_en_bd(adm_user, adm_pass, adm_emp)
+                if exito:
+                    st.success(f"¡Empresa '{adm_emp.upper()}' registrada con éxito bajo el usuario '{adm_user}'!")
+                else:
+                    st.error(f"Error al registrar: {error_msg}")
+
+    # --- SECCIÓN PRODUCTOS ---
+    elif menu == "📦 Productos":
         st.title("📦 Gestión del Catálogo de Productos")
         
         tab_ver_prod, tab_anadir_prod, tab_importar_excel, tab_editar_prod = st.tabs([
@@ -355,7 +421,6 @@ else:
             lista_p = consultar_productos(st.session_state.empresa, st.session_state.usuario)
             if lista_p:
                 df_mostrar = pd.DataFrame(lista_p)
-                # Formateamos visualmente los nombres de las columnas para que queden profesionales
                 df_mostrar = df_mostrar.rename(columns={
                     "categoria": "Categoría", "elemento": "Elemento / Componente", 
                     "marca_fabricante": "Marca / Fabricante", "precio_unitario": "Precio (€)", 
@@ -383,36 +448,30 @@ else:
                     
         with tab_importar_excel:
             st.subheader("Carga masiva desde archivo Excel")
-            st.write("Sube el archivo Excel respetando el orden acordado de las columnas.")
             archivo_excel = st.file_uploader("Selecciona tu archivo .xlsx", type=["xlsx"])
             
             if archivo_excel is not None:
                 if st.button("🚀 Procesar e Importar todo el Excel", use_container_width=True):
                     try:
-                        # Leemos saltándonos las filas de título iniciales (empezamos en fila 4 que es la cabecera)
                         df = pd.read_excel(archivo_excel, skiprows=3)
-                        
-                        # Limpiamos filas que estén completamente en blanco
                         df = df.dropna(subset=["Categoría", "Elemento / Componente", "Marca / Fabricante"])
                         
                         contador_exito = 0
                         for index, fila in df.iterrows():
-                            # Mapeamos los datos de las columnas del Excel
                             c_cat = str(fila["Categoría"]).strip()
                             c_elem = str(fila["Elemento / Componente"]).strip()
                             c_marca = str(fila["Marca / Fabricante"]).strip()
                             c_precio = float(fila["Precio Unitario (€)"]) if pd.notnull(fila["Precio Unitario (€)"]) else 0.0
                             c_unidad = str(fila["Unidad de Medida"]).strip() if pd.notnull(fila["Unidad de Medida"]) else "Uds."
                             
-                            # Insertamos secuencialmente en la BD
                             exito = guardar_producto_en_bd(c_cat, c_elem, c_marca, c_precio, c_unidad, st.session_state.empresa)
                             if exito:
                                 contador_exito += 1
                                 
-                        st.success(f"¡Importación masiva completada! Se han añadido {contador_exito} productos correctamente.")
+                        st.success(f"¡Importación masiva completada! Se han añadido {contador_exito} productos.")
                         st.rerun()
                     except Exception as err:
-                        st.error(f"Error al leer el archivo. Comprueba que las columnas se llamen exactamente como en la plantilla: {str(err)}")
+                        st.error(f"Error al importar: {str(err)}")
                         
         with tab_editar_prod:
             st.subheader("Modificar información o añadir foto real")
@@ -424,29 +483,18 @@ else:
                 p_seleccionado = st.selectbox("Selecciona producto a gestionar", list(opciones_p.keys()))
                 prod_data = opciones_p[p_seleccionado]
                 
-                # Vista de la imagen si ya existe
                 if prod_data.get("foto_url"):
                     st.image(prod_data["foto_url"], caption="Foto actual del producto", width=250)
-                else:
-                    st.info("Este producto no tiene foto asignada todavía.")
                 
-                # Zona de carga de foto (Cámara / Archivo móvil)
-                st.write("---")
-                st.markdown("📸 **Añadir o cambiar foto desde el móvil / PC:**")
                 imagen_subida = st.file_uploader("Haz una foto o elige de tu galería", type=["jpg", "jpeg", "png"], key=f"foto_{prod_data['id']}")
-                
                 if imagen_subida is not None:
                     if st.button("📤 Subir y Enlazar Foto", use_container_width=True):
-                        with st.spinner("Subiendo imagen a la nube de Supabase..."):
-                            bytes_data = imagen_subida.read()
-                            url_final = subir_imagen_a_supabase(bytes_data, imagen_subida.name)
-                            if url_final:
-                                if actualizar_foto_producto_en_bd(prod_data['id'], url_final):
-                                    st.success("¡Foto guardada y enlazada con éxito!")
-                                    st.rerun()
-                st.write("---")
+                        bytes_data = imagen_subida.read()
+                        url_final = subir_imagen_a_supabase(bytes_data, imagen_subida.name)
+                        if url_final and actualizar_foto_producto_en_bd(prod_data['id'], url_final):
+                            st.success("¡Foto guardada y enlazada!")
+                            st.rerun()
                 
-                # Formulario estándar de modificación de texto
                 edit_cat = st.text_input("Modificar Categoría", value=prod_data['categoria'])
                 edit_elem = st.text_input("Modificar Elemento", value=prod_data['elemento'])
                 edit_marca = st.text_input("Modificar Marca/Fabricante", value=prod_data['marca_fabricante'])
@@ -462,7 +510,7 @@ else:
                 with col_btn_p2:
                     if st.button("🗑️ Eliminar del Catálogo", type="secondary", use_container_width=True):
                         if eliminar_producto_en_bd(prod_data['id']):
-                            st.warning("Producto eliminado permanentemente.")
+                            st.warning("Producto eliminado.")
                             st.rerun()
 
     # --- SECCIÓN CLIENTES ---
