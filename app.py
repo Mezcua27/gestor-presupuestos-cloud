@@ -488,3 +488,25 @@ else:
             id_sel = st.selectbox("Selecciona un código para gestionar o descargar PDF:", codigos)
             
             col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("✉️ Marcar Enviado", use_container_width=True):
+                    registrar_envio_presupuesto(id_sel)
+                    st.rerun()
+            with col2:
+                if st.button("✔️ Aceptar", use_container_width=True):
+                    actualizar_estado_presupuesto(id_sel, "Aceptado")
+                    st.rerun()
+            with col3:
+                if st.button("❌ Rechazar", use_container_width=True):
+                    actualizar_estado_presupuesto(id_sel, "Rechazado")
+                    st.rerun()
+                        
+            pdf_data = generar_pdf_bytes(id_sel)
+            if pdf_data:
+                st.download_button(
+                    label="📥 Descargar PDF Oficial",
+                    data=pdf_data,
+                    file_name=f"Presupuesto_{id_sel}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
