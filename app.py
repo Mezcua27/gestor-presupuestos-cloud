@@ -79,7 +79,7 @@ def eliminar_usuario_en_bd(username_a_borrar):
 
 def consultar_productos(empresa, username=""):
     try:
-        columnas = "id, categoria, elemento, marca_fabricante, precio_unitario, unidad_medida, foto_url"
+        columnas = "id, categoria, elemento, marca_fabricante, precio_unitario (PVP con IVA), unidad_medida, foto_url"
         if username.lower().strip() == "admin":
             res = supabase.table("productos").select(f"{columnas}, empresa").execute()
         else:
