@@ -58,7 +58,7 @@ def guardar_usuario_en_bd(username, password, empresa):
 
 def consultar_todos_los_usuarios():
     try:
-        # Traemos TODOS los usuarios de la tabla sin filtros ni alias para evitar errores
+        # Traemos TODOS los usuarios registrados sin importar su empresa ni alias raros
         res = supabase.table("usuarios").select("*").execute()
         if res.data:
             return res.data
@@ -69,7 +69,7 @@ def consultar_todos_los_usuarios():
 
 def eliminar_usuario_en_bd(username_a_borrar):
     try:
-        # Eliminamos usando el campo username de forma segura
+        # Eliminamos de forma segura buscando por el nombre de usuario único
         supabase.table("usuarios").delete().eq("username", username_a_borrar).execute()
         return True
     except:
@@ -346,6 +346,7 @@ if not st.session_state.autenticado:
 else:
     es_admin = st.session_state.usuario.lower().strip() == "admin"
     
+    # ⚙️ Menú dinámico según si es Admin o un usuario de empresa normal
     opciones_menu = ["📦 Productos", "👥 Clientes", "✍️ Nuevo Presupuesto", "📜 Historial"]
     if es_admin:
         st.sidebar.title("👑 PANEL ADMINISTRADOR")
@@ -362,10 +363,10 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- 👑 SECCIÓN EXCLUSIVA: GESTIÓN DE USUARIOS (SÓLO ADMIN) ---
+    # --- 👑 SECCIÓN EXCLUSIVA: GESTIÓN DE OPERARIOS/USUARIOS (SÓLO ADMIN) ---
     if menu == "👥 Gestión de Usuarios" and es_admin:
-        st.title("👥 Control Maestro de Usuarios")
-        st.write("Como administrador global, aquí puedes auditar las cuentas registradas y gestionar sus accesos.")
+        st.title("👥 Control Maestro de Usuarios / Operarios")
+        st.write("Como administrador global, aquí puedes auditar las cuentas de los empleados registradas y gestionar sus accesos.")
         
         tab_lista_u, tab_crear_u = st.tabs(["👁️ Ver Usuarios Activos", "➕ Registrar Nueva Empresa/Usuario"])
         
@@ -376,6 +377,7 @@ else:
             else:
                 df_u = pd.DataFrame(usuarios)
                 
+                # Renombramos para que se vea claro en el panel de control
                 columnas_a_renombrar = {
                     "username": "Empleado / Operario", 
                     "empresa": "Empresa / Grupo"
@@ -385,6 +387,7 @@ else:
                     
                 df_u = df_u.rename(columns=columnas_a_renombrar)
                 
+                # Ocultamos la contraseña hash por obvias razones de seguridad
                 if "password_hash" in df_u.columns:
                     df_u = df_u.drop(columns=["password_hash"])
                     
@@ -392,6 +395,7 @@ else:
                 
                 st.divider()
                 st.subheader("🗑️ Dar de baja un usuario")
+                # Excluimos al admin de las opciones para no autoborrarse
                 opciones_borrar = {f"{u['username'].upper()} (Empresa: {u['empresa'].upper()})": u for u in usuarios if u['username'].lower() != 'admin'}
                 
                 if not opciones_borrar:
@@ -402,12 +406,14 @@ else:
                     
                     st.warning(f"⚠️ ¡Atención! Eliminarás al usuario '{user_a_borrar['username']}'. Esta acción no se puede deshacer.")
                     if st.button("Confirmar Eliminación Definitiva", type="secondary", use_container_width=True):
+                        # Eliminamos por username para blindar el borrado si no hay clave ID estándar
                         if eliminar_usuario_en_bd(user_a_borrar['username']):
                             st.success(f"El usuario {user_a_borrar['username']} ha sido eliminado del sistema.")
                             st.rerun()
                             
         with tab_crear_u:
             st.subheader("Crear cuenta corporativa directa")
+            st.write("Utiliza este formulario si quieres dar de alta tú mismo a un empleado/organización sin que tengan que registrarse desde fuera.")
             adm_user = st.text_input("Usuario corporativo", key="adm_u_reg")
             adm_pass = st.text_input("Contraseña inicial", type="password", key="adm_p_reg")
             adm_emp = st.text_input("Nombre de la Organización / Empresa", key="adm_e_reg")
@@ -459,30 +465,68 @@ else:
                     
         with tab_importar_excel:
             st.subheader("Carga masiva desde archivo Excel")
+            st.write("Sube tu archivo Excel. El sistema buscará las columnas automáticamente.")
             archivo_excel = st.file_uploader("Selecciona tu archivo .xlsx", type=["xlsx"])
             
             if archivo_excel is not None:
                 if st.button("🚀 Procesar e Importar todo el Excel", use_container_width=True):
                     try:
-                        df = pd.read_excel(archivo_excel, skiprows=3)
-                        df = df.dropna(subset=["Categoría", "Elemento / Componente", "Marca / Fabricante"])
+                        df = pd.read_excel(archivo_excel)
                         
-                        contador_exito = 0
-                        for index, fila in df.iterrows():
-                            c_cat = str(fila["Categoría"]).strip()
-                            c_elem = str(fila["Elemento / Componente"]).strip()
-                            c_marca = str(fila["Marca / Fabricante"]).strip()
-                            c_precio = float(fila["Precio Unitario (€)"]) if pd.notnull(fila["Precio Unitario (€)"]) else 0.0
-                            c_unidad = str(fila["Unidad de Medida"]).strip() if pd.notnull(fila["Unidad de Medida"]) else "Uds."
+                        # Si los títulos reales estaban más abajo, buscamos automáticamente la cabecera
+                        if not any(col for col in df.columns if "categor" in str(col).lower()):
+                            for i, fila in df.iterrows():
+                                valores_fila = [str(v).lower() for v in fila.values]
+                                if any("categor" in vf for vf in valores_fila):
+                                    df = pd.read_excel(archivo_excel, skiprows=i+1)
+                                    break
+
+                        # Limpiamos los nombres de las columnas a minúsculas
+                        df.columns = [str(c).strip().lower() for c in df.columns]
+                        
+                        # Mapeo inteligente por palabras clave (Flexible a tildes, mayúsculas y símbolos)
+                        col_cat = next((c for c in df.columns if "categor" in c), None)
+                        col_elem = next((c for c in df.columns if "elemento" in c or "componente" in c), None)
+                        col_marca = next((c for c in df.columns if "marca" in c or "fabricante" in c), None)
+                        col_precio = next((c for c in df.columns if "precio" in c or "eur" in c or "coste" in c), None)
+                        col_unidad = next((c for c in df.columns if "unidad" in c or "medida" in c), None)
+
+                        # Validación amigable de campos
+                        columnas_faltantes = []
+                        if not col_cat: columnas_faltantes.append("Categoría")
+                        if not col_elem: columnas_faltantes.append("Elemento / Componente")
+                        if not col_marca: columnas_faltantes.append("Marca / Fabricante")
+                        if not col_precio: columnas_faltantes.append("Precio Unitario")
+                        
+                        if columnas_faltantes:
+                            st.error(f"No encuentro estas columnas en tu Excel: {columnas_faltantes}. Por favor, comprueba los nombres de la cabecera.")
+                        else:
+                            # Limpiamos las celdas vacías de las filas críticas
+                            df = df.dropna(subset=[col_cat, col_elem, col_marca])
                             
-                            exito = guardar_producto_en_bd(c_cat, c_elem, c_marca, c_precio, c_unidad, st.session_state.empresa)
-                            if exito:
-                                contador_exito += 1
+                            contador_exito = 0
+                            for index, fila in df.iterrows():
+                                c_cat = str(fila[col_cat]).strip()
+                                c_elem = str(fila[col_elem]).strip()
+                                c_marca = str(fila[col_marca]).strip()
                                 
-                        st.success(f"¡Importación masiva completada! Se han añadido {contador_exito} productos.")
-                        st.rerun()
+                                # Extraemos el precio con salvavidas por si viene como texto
+                                try:
+                                    valor_precio = fila[col_precio]
+                                    c_precio = float(valor_precio) if pd.notnull(valor_precio) else 0.0
+                                except:
+                                    c_precio = 0.0
+                                    
+                                c_unidad = str(fila[col_unidad]).strip() if col_unidad and pd.notnull(fila[col_unidad]) else "Uds."
+                                
+                                exito = guardar_producto_en_bd(c_cat, c_elem, c_marca, c_precio, c_unidad, st.session_state.empresa)
+                                if exito:
+                                    contador_exito += 1
+                                    
+                            st.success(f"¡Importación masiva completada con éxito! Se han añadido {contador_exito} productos al catálogo.")
+                            st.rerun()
                     except Exception as err:
-                        st.error(f"Error al importar: {str(err)}")
+                        st.error(f"Error inesperado al procesar el archivo: {str(err)}")
                         
         with tab_editar_prod:
             st.subheader("Modificar información o añadir foto real")
@@ -541,138 +585,4 @@ else:
         with tab_anadir_cli:
             st.subheader("Registrar nuevo cliente")
             nombre = st.text_input("Nombre / Razón Social")
-            telefono = st.text_input("Teléfono de contacto")
-            email = st.text_input("Email de contacto")
-            if st.button("Guardar Cliente", use_container_width=True):
-                if nombre:
-                    exito, error_msg = guardar_cliente_en_bd(nombre, telefono, email, st.session_state.empresa)
-                    if exito:
-                        st.success("Cliente registrado con éxito.")
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {error_msg}")
-                else:
-                    st.warning("El campo Nombre es obligatorio.")
-                    
-        with tab_editar_cli:
-            st.subheader("Modificar o eliminar información de un cliente")
-            lista_c_edit = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
-            if not lista_c_edit:
-                st.info("No hay clientes guardados.")
-            else:
-                if es_admin:
-                    opciones_c = {f"[{c.get('empresa','').upper()}] {c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
-                else:
-                    opciones_c = {f"{c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
-                    
-                c_seleccionado = st.selectbox("Selecciona el cliente a gestionar", list(opciones_c.keys()))
-                cli_data = opciones_c[c_seleccionado]
-                
-                edit_nombre = st.text_input("Modificar Nombre/Empresa", value=cli_data['nombre'])
-                edit_telefono = st.text_input("Modificar Teléfono", value=cli_data['telefono'] or "")
-                edit_email = st.text_input("Modificar Email", value=cli_data['email'] or "")
-                
-                col_btn_c1, col_btn_c2 = st.columns(2)
-                with col_btn_c1:
-                    if st.button("💾 Actualizar Cliente", type="primary", use_container_width=True):
-                        if actualizar_cliente_en_bd(cli_data['id'], edit_nombre, edit_telefono, edit_email):
-                            st.success("¡Información actualizada con éxito!")
-                            st.rerun()
-                with col_btn_c2:
-                    if st.button("🗑️ Eliminar de la Agenda", type="secondary", use_container_width=True):
-                        if eliminar_cliente_en_bd(cli_data['id']):
-                            st.warning("Cliente eliminado permanentemente.")
-                            st.rerun()
-
-    # --- SECCIÓN NUEVO PRESUPUESTO ---
-    elif menu == "✍️ Nuevo Presupuesto":
-        st.title("✍️ Generar Presupuesto")
-        id_pres = obtener_siguiente_id_presupuesto(st.session_state.empresa)
-        st.info(f"Código Asignado para tu Empresa: **{id_pres}**")
-        
-        clientes = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
-        opciones_clientes = {f"{c['numero_cliente']} - {c['nombre']}": c['numero_cliente'] for c in clientes}
-        
-        if not opciones_clientes:
-            st.warning("Primero debes registrar algún cliente en la sección correspondiente.")
-        else:
-            cliente_sel = st.selectbox("Selecciona el Cliente", list(opciones_clientes.keys()))
-            
-            st.divider()
-            productos = consultar_productos(st.session_state.empresa, st.session_state.usuario)
-            opciones_productos = {f"[{p['categoria']}] {p['elemento']} ({p['marca_fabricante']}) - {p['precio_unitario']}€": p for p in productos}
-            
-            if not opciones_productos:
-                st.warning("Tu empresa no tiene productos todavía en el catálogo.")
-            else:
-                prod_sel = st.selectbox("Selecciona Producto", list(opciones_productos.keys()))
-                cant = st.number_input("Cantidad", min_value=1, value=1, step=1)
-                
-                if st.button("➕ Añadir artículo"):
-                    p_data = opciones_productos[prod_sel]
-                    st.session_state.items_presupuesto.append({
-                        "elemento": p_data['elemento'], 
-                        "marca_fabricante": p_data['marca_fabricante'], 
-                        "precio": p_data['precio_unitario'], 
-                        "cantidad": cant
-                    })
-                    
-                if st.session_state.items_presupuesto:
-                    st.subheader("Líneas del Presupuesto")
-                    st.dataframe(st.session_state.items_presupuesto, use_container_width=True)
-                    total = sum(i['precio'] * i['cantidad'] for i in st.session_state.items_presupuesto)
-                    st.metric("TOTAL PRESUPUESTADO", f"{total:.2f} €")
-                    
-                    if st.button("💾 Guardar y Confirmar Presupuesto", type="primary"):
-                        if guardar_presupuesto_en_bd(id_pres, opciones_clientes[cliente_sel], st.session_state.items_presupuesto, st.session_state.empresa):
-                            st.success(f"Presupuesto {id_pres} guardado.")
-                            st.session_state.items_presupuesto = []
-                            st.rerun()
-
-    # --- SECCIÓN HISTORIAL ---
-    elif menu == "📜 Historial":
-        st.title("📜 Historial de Presupuestos")
-        historial = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
-        
-        datos_tabla = []
-        for h in historial:
-            item_tabla = {
-                "Código": h["id_presupuesto"],
-                "Cliente": h["clientes"]["nombre"] if h.get("clientes") else "Desconocido",
-                "Estado": h["estado"]
-            }
-            if es_admin:
-                item_tabla["Empresa"] = h.get("empresa", "Desconocida").upper()
-                
-            datos_tabla.append(item_tabla)
-            
-        if not datos_tabla:
-            st.info("No hay presupuestos creados por tu empresa todavía.")
-        else:
-            st.dataframe(datos_tabla, use_container_width=True)
-            codigos = [d["Código"] for d in datos_tabla]
-            id_sel = st.selectbox("Selecciona un código para gestionar o descargar PDF:", codigos)
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button("✉️ Marcar Enviado", use_container_width=True):
-                    registrar_envio_presupuesto(id_sel)
-                    st.rerun()
-            with col2:
-                if st.button("✔️ Aceptar", use_container_width=True):
-                    actualizar_estado_presupuesto(id_sel, "Aceptado")
-                    st.rerun()
-            with col3:
-                if st.button("❌ Rechazar", use_container_width=True):
-                    actualizar_estado_presupuesto(id_sel, "Rechazado")
-                    st.rerun()
-                        
-            pdf_data = generar_pdf_bytes(id_sel)
-            if pdf_data:
-                st.download_button(
-                    label="📥 Descargar PDF Oficial",
-                    data=pdf_data,
-                    file_name=f"Presupuesto_{id_sel}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+            telefono = st.text
