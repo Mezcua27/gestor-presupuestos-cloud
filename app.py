@@ -79,7 +79,7 @@ def eliminar_usuario_en_bd(username_a_borrar):
 
 def consultar_productos(empresa, username=""):
     try:
-        columnas = "id, categoria, elemento, marca_fabricante, precio_unitario (PVP con IVA), unidad_medida, foto_url"
+        columnas = "id, categoria, elemento, marca_fabricante, precio_unitario, unidad_medida, foto_url"
         if username.lower().strip() == "admin":
             res = supabase.table("productos").select(f"{columnas}, empresa").execute()
         else:
@@ -523,8 +523,12 @@ else:
                                 if exito:
                                     contador_exito += 1
                                     
-                            st.success(f"¡Importación masiva completada con éxito! Se han añadido {contador_exito} productos al catálogo.")
-                            st.rerun()
+                            # Mensaje fijo y visible sin recarga inmediata brusca
+                            if contador_exito > 0:
+                                st.success(f"¡Importación masiva completada con éxito! Se han añadido {contador_exito} productos al catálogo.")
+                            else:
+                                st.warning("No se pudo importar ningún producto. Revisa si las filas de tu Excel estaban vacías o mal formateadas.")
+                                
                     except Exception as err:
                         st.error(f"Error inesperado al procesar el archivo: {str(err)}")
                         
@@ -585,4 +589,138 @@ else:
         with tab_anadir_cli:
             st.subheader("Registrar nuevo cliente")
             nombre = st.text_input("Nombre / Razón Social")
-            telefono = st.text
+            telefono = st.text_input("Teléfono de contacto")
+            email = st.text_input("Email de contacto")
+            if st.button("Guardar Cliente", use_container_width=True):
+                if nombre:
+                    exito, error_msg = guardar_cliente_en_bd(nombre, telefono, email, st.session_state.empresa)
+                    if exito:
+                        st.success("Cliente registrado con éxito.")
+                        st.rerun()
+                    else:
+                        st.error(f"Error: {error_msg}")
+                else:
+                    st.warning("El campo Nombre es obligatorio.")
+                    
+        with tab_editar_cli:
+            st.subheader("Modificar o eliminar información de un cliente")
+            lista_c_edit = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
+            if not lista_c_edit:
+                st.info("No hay clientes guardados.")
+            else:
+                if es_admin:
+                    opciones_c = {f"[{c.get('empresa','').upper()}] {c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
+                else:
+                    opciones_c = {f"{c['numero_cliente']} - {c['nombre']}": c for c in lista_c_edit}
+                    
+                c_seleccionado = st.selectbox("Selecciona el cliente a gestionar", list(opciones_c.keys()))
+                cli_data = opciones_c[c_seleccionado]
+                
+                edit_nombre = st.text_input("Modificar Nombre/Empresa", value=cli_data['nombre'])
+                edit_telefono = st.text_input("Modificar Teléfono", value=cli_data['telefono'] or "")
+                edit_email = st.text_input("Modificar Email", value=cli_data['email'] or "")
+                
+                col_btn_c1, col_btn_c2 = st.columns(2)
+                with col_btn_c1:
+                    if st.button("💾 Actualizar Cliente", type="primary", use_container_width=True):
+                        if actualizar_cliente_en_bd(cli_data['id'], edit_nombre, edit_telefono, edit_email):
+                            st.success("¡Información actualizada con éxito!")
+                            st.rerun()
+                with col_btn_c2:
+                    if st.button("🗑️ Eliminar de la Agenda", type="secondary", use_container_width=True):
+                        if eliminar_cliente_en_bd(cli_data['id']):
+                            st.warning("Cliente eliminado permanentemente.")
+                            st.rerun()
+
+    # --- SECCIÓN NUEVO PRESUPUESTO ---
+    elif menu == "✍️ Nuevo Presupuesto":
+        st.title("✍️ Generar Presupuesto")
+        id_pres = obtener_siguiente_id_presupuesto(st.session_state.empresa)
+        st.info(f"Código Asignado para tu Empresa: **{id_pres}**")
+        
+        clientes = consultar_clientes(st.session_state.empresa, st.session_state.usuario)
+        opciones_clientes = {f"{c['numero_cliente']} - {c['nombre']}": c['numero_cliente'] for c in clientes}
+        
+        if not opciones_clientes:
+            st.warning("Primero debes registrar algún cliente en la sección correspondiente.")
+        else:
+            cliente_sel = st.selectbox("Selecciona el Cliente", list(opciones_clientes.keys()))
+            
+            st.divider()
+            productos = consultar_productos(st.session_state.empresa, st.session_state.usuario)
+            opciones_productos = {f"[{p['categoria']}] {p['elemento']} ({p['marca_fabricante']}) - {p['precio_unitario']}€": p for p in productos}
+            
+            if not opciones_productos:
+                st.warning("Tu empresa no tiene productos todavía en el catálogo.")
+            else:
+                prod_sel = st.selectbox("Selecciona Producto", list(opciones_productos.keys()))
+                cant = st.number_input("Cantidad", min_value=1, value=1, step=1)
+                
+                if st.button("➕ Añadir artículo"):
+                    p_data = opciones_productos[prod_sel]
+                    st.session_state.items_presupuesto.append({
+                        "elemento": p_data['elemento'], 
+                        "marca_fabricante": p_data['marca_fabricante'], 
+                        "precio": p_data['precio_unitario'], 
+                        "cantidad": cant
+                    })
+                    
+                if st.session_state.items_presupuesto:
+                    st.subheader("Líneas del Presupuesto")
+                    st.dataframe(st.session_state.items_presupuesto, use_container_width=True)
+                    total = sum(i['precio'] * i['cantidad'] for i in st.session_state.items_presupuesto)
+                    st.metric("TOTAL PRESUPUESTADO", f"{total:.2f} €")
+                    
+                    if st.button("💾 Guardar y Confirmar Presupuesto", type="primary"):
+                        if guardar_presupuesto_en_bd(id_pres, opciones_clientes[cliente_sel], st.session_state.items_presupuesto, st.session_state.empresa):
+                            st.success(f"Presupuesto {id_pres} guardado.")
+                            st.session_state.items_presupuesto = []
+                            st.rerun()
+
+    # --- SECCIÓN HISTORIAL ---
+    elif menu == "📜 Historial":
+        st.title("📜 Historial de Presupuestos")
+        historial = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
+        
+        datos_tabla = []
+        for h in historial:
+            item_tabla = {
+                "Código": h["id_presupuesto"],
+                "Cliente": h["clientes"]["nombre"] if h.get("clientes") else "Desconocido",
+                "Estado": h["estado"]
+            }
+            if es_admin:
+                item_tabla["Empresa"] = h.get("empresa", "Desconocida").upper()
+                
+            datos_tabla.append(item_tabla)
+            
+        if not datos_tabla:
+            st.info("No hay presupuestos creados por tu empresa todavía.")
+        else:
+            st.dataframe(datos_tabla, use_container_width=True)
+            codigos = [d["Código"] for d in datos_tabla]
+            id_sel = st.selectbox("Selecciona un código para gestionar o descargar PDF:", codigos)
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("✉️ Marcar Enviado", use_container_width=True):
+                    registrar_envio_presupuesto(id_sel)
+                    st.rerun()
+            with col2:
+                if st.button("✔️ Aceptar", use_container_width=True):
+                    actualizar_estado_presupuesto(id_sel, "Aceptado")
+                    st.rerun()
+            with col3:
+                if st.button("❌ Rechazar", use_container_width=True):
+                    actualizar_estado_presupuesto(id_sel, "Rechazado")
+                    st.rerun()
+                        
+            pdf_data = generar_pdf_bytes(id_sel)
+            if pdf_data:
+                st.download_button(
+                    label="📥 Descargar PDF Oficial",
+                    data=pdf_data,
+                    file_name=f"Presupuesto_{id_sel}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
