@@ -105,9 +105,11 @@ def consultar_clientes(empresa, username=""):
 def guardar_cliente_en_bd(nombre, telefono, email, empresa):
     try:
         empresa_limpia = empresa.lower().strip()
-        # 🔧 Corregido: Pasamos la empresa limpia para contar correctamente los clientes existentes de este negocio
-        actuales = consultar_clientes(empresa_limpia, username="")
-        siguiente_num = len(actuales) + 1
+        
+        # 🔧 Buscamos los clientes que pertenecen ÚNICAMENTE a esta empresa para llevar la cuenta aislada
+        res = supabase.table("clientes").select("numero_cliente").eq("empresa", empresa_limpia).execute()
+        
+        siguiente_num = len(res.data) + 1
         num_cliente = f"CLI-{siguiente_num:04d}"
         
         supabase.table("clientes").insert({
