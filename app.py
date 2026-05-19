@@ -2,6 +2,7 @@ import streamlit as st
 import datetime
 import hashlib
 import io
+import pandas as pd  # Para procesar el Excel masivo
 
 # 📄 Importaciones para ReportLab (PDFs)
 from reportlab.pdfgen import canvas
@@ -53,32 +54,49 @@ def guardar_usuario_en_bd(username, password, empresa):
     except Exception as e: 
         return False, str(e)
 
-# --- GESTIÓN DE PRODUCTOS ---
+# --- GESTIÓN DE PRODUCTOS NUEVA ESTRUCTURA ---
 
 def consultar_productos(empresa, username=""):
     try:
+        columnas = "id, categoria, elemento, marca_fabricante, precio_unitario, unidad_medida, foto_url"
         if username.lower().strip() == "admin":
-            res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida, empresa").execute()
+            res = supabase.table("productos").select(f"{columnas}, empresa").execute()
         else:
-            res = supabase.table("productos").select("id, marca, modelo, precio_unitario, unidad_medida").eq("empresa", empresa).execute()
+            res = supabase.table("productos").select(columnas).eq("empresa", empresa.lower().strip()).execute()
         return res.data
     except: 
         return []
 
-def guardar_producto_en_bd(marca, modelo, precio, unidad, empresa):
+def guardar_producto_en_bd(categoria, elemento, marca, precio, unidad, empresa):
     try:
         supabase.table("productos").insert({
-            "marca": marca, "modelo": modelo, "precio_unitario": precio, "unidad_medida": unidad, "empresa": empresa.lower().strip()
+            "categoria": categoria, 
+            "elemento": elemento, 
+            "marca_fabricante": marca, 
+            "precio_unitario": precio, 
+            "unidad_medida": unidad, 
+            "empresa": empresa.lower().strip()
         }).execute()
         return True
     except: 
         return False
 
-def actualizar_producto_en_bd(prod_id, marca, modelo, precio, unidad):
+def actualizar_producto_en_bd(prod_id, categoria, elemento, marca, precio, unidad):
     try:
         supabase.table("productos").update({
-            "marca": marca, "modelo": modelo, "precio_unitario": precio, "unidad_medida": unidad
+            "categoria": categoria, 
+            "elemento": elemento, 
+            "marca_fabricante": marca, 
+            "precio_unitario": precio, 
+            "unidad_medida": unidad
         }).eq("id", prod_id).execute()
+        return True
+    except:
+        return False
+
+def actualizar_foto_producto_en_bd(prod_id, url_foto):
+    try:
+        supabase.table("productos").update({"foto_url": url_foto}).eq("id", prod_id).execute()
         return True
     except:
         return False
@@ -89,6 +107,25 @@ def eliminar_producto_en_bd(prod_id):
         return True
     except:
         return False
+
+def subir_imagen_a_supabase(file_bytes, file_name):
+    try:
+        # Subimos el archivo al bucket público 'productos-fotos'
+        bucket_name = "productos-fotos"
+        path_en_bucket = f"foto_{int(datetime.datetime.now().timestamp())}_{file_name}"
+        
+        supabase.storage.from_(bucket_name).upload(
+            path=path_en_bucket,
+            file=file_bytes,
+            file_options={"content-type": "image/jpeg"}
+        )
+        
+        # Obtenemos la URL pública del archivo subido
+        url_publica = supabase.storage.from_(bucket_name).get_public_url(path_en_bucket)
+        return url_publica
+    except Exception as e:
+        st.error(f"Error técnico al subir al almacenamiento: {str(e)}")
+        return None
 
 # --- GESTIÓN DE CLIENTES ---
 
@@ -151,8 +188,11 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, empresa):
         supabase.table("budgets").insert({"id_presupuesto": id_presupuesto, "numero_cliente": numero_cliente, "estado": "Pendiente", "empresa": empresa.lower().strip()}).execute()
         for item in items:
             supabase.table("detalles_presupuesto").insert({
-                "id_presupuesto": id_presupuesto, "marca_producto": item['marca'], "modelo_producto": item['modelo'],
-                "precio_cobrado": item['precio'], "cantidad": item['cantidad']
+                "id_presupuesto": id_presupuesto, 
+                "marca_producto": item['elemento'],  # Mapeado temporal para compatibilidad
+                "modelo_producto": item['marca_fabricante'],
+                "precio_cobrado": item['precio'], 
+                "cantidad": item['cantidad']
             }).execute()
         return True
     except: 
@@ -203,7 +243,7 @@ def generar_pdf_bytes(id_presupuesto):
     
     y_superior = 660
     pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(55, 645, "Producto")
+    pdf.drawString(55, 645, "Producto / Elemento")
     pdf.drawCentredString(290, 645, "Precio U.")
     pdf.drawCentredString(390, 645, "Cant.")
     pdf.drawCentredString(495, 645, "Subtotal")
@@ -216,7 +256,7 @@ def generar_pdf_bytes(id_presupuesto):
         cant_val = art.get('quantity', art.get('cantidad', 1))
         subtotal = art['precio_cobrado'] * cant_val
         total_acumulado += subtotal
-        pdf.drawString(55, y_pos, f"{art['marca_producto']} {art['modelo_producto']}")
+        pdf.drawString(55, y_pos, f"{art['marca_producto']} - {art['modelo_producto']}")
         pdf.drawCentredString(290, y_pos, f"{art['precio_cobrado']:.2f}€")
         pdf.drawCentredString(390, y_pos, str(cant_val))
         pdf.drawCentredString(495, y_pos, f"{subtotal:.2f}€")
@@ -302,65 +342,127 @@ else:
         st.session_state.empresa = ""
         st.rerun()
 
-    # --- SECCIÓN PRODUCTOS ---
+    # --- SECCIÓN PRODUCTOS (ADAPTADA CON FOTOS E IMPORTADOR) ---
     if menu == "📦 Productos":
-        st.title("📦 Gestión de Productos")
+        st.title("📦 Gestión del Catálogo de Productos")
         
-        tab_ver_prod, tab_anadir_prod, tab_editar_prod = st.tabs(["👁️ Ver Catálogo", "➕ Añadir Producto", "✏️ Modificar / Eliminar"])
+        tab_ver_prod, tab_anadir_prod, tab_importar_excel, tab_editar_prod = st.tabs([
+            "👁️ Ver Catálogo", "➕ Añadir Manual", "📥 Importar desde Excel", "✏️ Modificar / Añadir Fotos"
+        ])
         
         with tab_ver_prod:
             st.subheader("Catálogo Actual")
             lista_p = consultar_productos(st.session_state.empresa, st.session_state.usuario)
             if lista_p:
-                st.dataframe(lista_p, use_container_width=True, hide_index=True)
+                df_mostrar = pd.DataFrame(lista_p)
+                # Formateamos visualmente los nombres de las columnas para que queden profesionales
+                df_mostrar = df_mostrar.rename(columns={
+                    "categoria": "Categoría", "elemento": "Elemento / Componente", 
+                    "marca_fabricante": "Marca / Fabricante", "precio_unitario": "Precio (€)", 
+                    "unidad_medida": "Unidad", "foto_url": "Enlace Foto"
+                })
+                st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
             else:
-                st.info("No hay productos registrados.")
+                st.info("No hay productos registrados en tu catálogo.")
                 
         with tab_anadir_prod:
-            st.subheader("Registrar nuevo producto")
-            marca = st.text_input("Marca")
-            modelo = st.text_input("Modelo")
-            precio = st.number_input("Precio (€)", min_value=0.0, step=1.0, key="add_p_precio")
-            # 🔧 Modificado: Se agregan 'Horas' y 'Litros'
-            unidad = st.selectbox("Unidad", ["Uds.", "Metros", "Kg", "Horas", "Litros"], key="add_p_unidad")
+            st.subheader("Registrar nuevo producto a mano")
+            cat = st.text_input("Categoría (Ej: Iluminación)")
+            elem = st.text_input("Elemento / Componente (Ej: Proyector LED)")
+            marca_f = st.text_input("Marca / Fabricante (Ej: Philips)")
+            precio = st.number_input("Precio Unitario (€)", min_value=0.0, step=1.0, key="add_p_precio")
+            unidad = st.selectbox("Unidad de Medida", ["Uds.", "Metros", "Kg", "Horas", "Litros"], key="add_p_unidad")
+            
             if st.button("Guardar Producto", use_container_width=True):
-                if marca and modelo:
-                    guardar_producto_en_bd(marca, modelo, precio, unidad, st.session_state.empresa)
-                    st.success("Producto guardado correctamente.")
-                    st.rerun()
+                if cat and elem and marca_f:
+                    if guardar_producto_en_bd(cat, elem, marca_f, precio, unidad, st.session_state.empresa):
+                        st.success("¡Producto guardado correctamente!")
+                        st.rerun()
                 else:
-                    st.warning("Completa la marca y el modelo.")
+                    st.warning("Por favor, rellena los campos de Categoría, Elemento y Marca.")
                     
+        with tab_importar_excel:
+            st.subheader("Carga masiva desde archivo Excel")
+            st.write("Sube el archivo Excel respetando el orden acordado de las columnas.")
+            archivo_excel = st.file_uploader("Selecciona tu archivo .xlsx", type=["xlsx"])
+            
+            if archivo_excel is not None:
+                if st.button("🚀 Procesar e Importar todo el Excel", use_container_width=True):
+                    try:
+                        # Leemos saltándonos las filas de título iniciales (empezamos en fila 4 que es la cabecera)
+                        df = pd.read_excel(archivo_excel, skiprows=3)
+                        
+                        # Limpiamos filas que estén completamente en blanco
+                        df = df.dropna(subset=["Categoría", "Elemento / Componente", "Marca / Fabricante"])
+                        
+                        contador_exito = 0
+                        for index, fila in df.iterrows():
+                            # Mapeamos los datos de las columnas del Excel
+                            c_cat = str(fila["Categoría"]).strip()
+                            c_elem = str(fila["Elemento / Componente"]).strip()
+                            c_marca = str(fila["Marca / Fabricante"]).strip()
+                            c_precio = float(fila["Precio Unitario (€)"]) if pd.notnull(fila["Precio Unitario (€)"]) else 0.0
+                            c_unidad = str(fila["Unidad de Medida"]).strip() if pd.notnull(fila["Unidad de Medida"]) else "Uds."
+                            
+                            # Insertamos secuencialmente en la BD
+                            exito = guardar_producto_en_bd(c_cat, c_elem, c_marca, c_precio, c_unidad, st.session_state.empresa)
+                            if exito:
+                                contador_exito += 1
+                                
+                        st.success(f"¡Importación masiva completada! Se han añadido {contador_exito} productos correctamente.")
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Error al leer el archivo. Comprueba que las columnas se llamen exactamente como en la plantilla: {str(err)}")
+                        
         with tab_editar_prod:
-            st.subheader("Modificar o eliminar un producto existente")
+            st.subheader("Modificar información o añadir foto real")
             lista_p_edit = consultar_productos(st.session_state.empresa, st.session_state.usuario)
             if not lista_p_edit:
-                st.info("No hay productos para modificar.")
+                st.info("No hay productos disponibles.")
             else:
-                if es_admin:
-                    opciones_p = {f"[{p.get('empresa','').upper()}] {p['marca']} {p['modelo']}": p for p in lista_p_edit}
-                else:
-                    opciones_p = {f"{p['marca']} {p['modelo']}": p for p in lista_p_edit}
-                    
-                p_seleccionado = st.selectbox("Selecciona el producto a editar", list(opciones_p.keys()))
+                opciones_p = {f"[{p['categoria'].upper()}] {p['elemento']} - {p['marca_fabricante']}": p for p in lista_p_edit}
+                p_seleccionado = st.selectbox("Selecciona producto a gestionar", list(opciones_p.keys()))
                 prod_data = opciones_p[p_seleccionado]
                 
-                edit_marca = st.text_input("Modificar Marca", value=prod_data['marca'])
-                edit_modelo = st.text_input("Modificar Modelo", value=prod_data['modelo'])
+                # Vista de la imagen si ya existe
+                if prod_data.get("foto_url"):
+                    st.image(prod_data["foto_url"], caption="Foto actual del producto", width=250)
+                else:
+                    st.info("Este producto no tiene foto asignada todavía.")
+                
+                # Zona de carga de foto (Cámara / Archivo móvil)
+                st.write("---")
+                st.markdown("📸 **Añadir o cambiar foto desde el móvil / PC:**")
+                imagen_subida = st.file_uploader("Haz una foto o elige de tu galería", type=["jpg", "jpeg", "png"], key=f"foto_{prod_data['id']}")
+                
+                if imagen_subida is not None:
+                    if st.button("📤 Subir y Enlazar Foto", use_container_width=True):
+                        with st.spinner("Subiendo imagen a la nube de Supabase..."):
+                            bytes_data = imagen_subida.read()
+                            url_final = subir_imagen_a_supabase(bytes_data, imagen_subida.name)
+                            if url_final:
+                                if actualizar_foto_producto_en_bd(prod_data['id'], url_final):
+                                    st.success("¡Foto guardada y enlazada con éxito!")
+                                    st.rerun()
+                st.write("---")
+                
+                # Formulario estándar de modificación de texto
+                edit_cat = st.text_input("Modificar Categoría", value=prod_data['categoria'])
+                edit_elem = st.text_input("Modificar Elemento", value=prod_data['elemento'])
+                edit_marca = st.text_input("Modificar Marca/Fabricante", value=prod_data['marca_fabricante'])
                 edit_precio = st.number_input("Modificar Precio (€)", min_value=0.0, value=float(prod_data['precio_unitario']), step=0.5)
-                # 🔧 Modificado: Se agregan 'Horas' y 'Litros' a la edición
                 edit_unidad = st.selectbox("Modificar Unidad", ["Uds.", "Metros", "Kg", "Horas", "Litros"], index=["Uds.", "Metros", "Kg", "Horas", "Litros"].index(prod_data['unidad_medida']))
                 
                 col_btn_p1, col_btn_p2 = st.columns(2)
                 with col_btn_p1:
-                    if st.button("💾 Guardar Cambios", type="primary", use_container_width=True):
-                        if actualizar_producto_en_bd(prod_data['id'], edit_marca, edit_modelo, edit_precio, edit_unidad):
-                            st.success("¡Producto actualizado!")
+                    if st.button("💾 Guardar Cambios de Texto", type="primary", use_container_width=True):
+                        if actualizar_producto_en_bd(prod_data['id'], edit_cat, edit_elem, edit_marca, edit_precio, edit_unidad):
+                            st.success("¡Información actualizada!")
                             st.rerun()
                 with col_btn_p2:
-                    if st.button("🗑️ Eliminar Producto", type="secondary", use_container_width=True):
+                    if st.button("🗑️ Eliminar del Catálogo", type="secondary", use_container_width=True):
                         if eliminar_producto_en_bd(prod_data['id']):
-                            st.warning("Producto eliminado del catálogo.")
+                            st.warning("Producto eliminado permanentemente.")
                             st.rerun()
 
     # --- SECCIÓN CLIENTES ---
@@ -439,7 +541,7 @@ else:
             
             st.divider()
             productos = consultar_productos(st.session_state.empresa, st.session_state.usuario)
-            opciones_productos = {f"{p['marca']} {p['modelo']} ({p['precio_unitario']}€)": p for p in productos}
+            opciones_productos = {f"[{p['categoria']}] {p['elemento']} ({p['marca_fabricante']}) - {p['precio_unitario']}€": p for p in productos}
             
             if not opciones_productos:
                 st.warning("Tu empresa no tiene productos todavía en el catálogo.")
@@ -450,7 +552,10 @@ else:
                 if st.button("➕ Añadir artículo"):
                     p_data = opciones_productos[prod_sel]
                     st.session_state.items_presupuesto.append({
-                        "marca": p_data['marca'], "modelo": p_data['modelo'], "precio": p_data['precio_unitario'], "cantidad": cant
+                        "elemento": p_data['elemento'], 
+                        "marca_fabricante": p_data['marca_fabricante'], 
+                        "precio": p_data['precio_unitario'], 
+                        "cantidad": cant
                     })
                     
                 if st.session_state.items_presupuesto:
