@@ -105,8 +105,6 @@ def consultar_clientes(empresa, username=""):
 def guardar_cliente_en_bd(nombre, telefono, email, empresa):
     try:
         empresa_limpia = empresa.lower().strip()
-        
-        # 🔧 Buscamos los clientes que pertenecen ÚNICAMENTE a esta empresa para llevar la cuenta aislada
         res = supabase.table("clientes").select("numero_cliente").eq("empresa", empresa_limpia).execute()
         
         siguiente_num = len(res.data) + 1
@@ -323,7 +321,8 @@ else:
             marca = st.text_input("Marca")
             modelo = st.text_input("Modelo")
             precio = st.number_input("Precio (€)", min_value=0.0, step=1.0, key="add_p_precio")
-            unidad = st.selectbox("Unidad", ["Uds.", "Metros", "Kg"], key="add_p_unidad")
+            # 🔧 Modificado: Se agregan 'Horas' y 'Litros'
+            unidad = st.selectbox("Unidad", ["Uds.", "Metros", "Kg", "Horas", "Litros"], key="add_p_unidad")
             if st.button("Guardar Producto", use_container_width=True):
                 if marca and modelo:
                     guardar_producto_en_bd(marca, modelo, precio, unidad, st.session_state.empresa)
@@ -349,7 +348,8 @@ else:
                 edit_marca = st.text_input("Modificar Marca", value=prod_data['marca'])
                 edit_modelo = st.text_input("Modificar Modelo", value=prod_data['modelo'])
                 edit_precio = st.number_input("Modificar Precio (€)", min_value=0.0, value=float(prod_data['precio_unitario']), step=0.5)
-                edit_unidad = st.selectbox("Modificar Unidad", ["Uds.", "Metros", "Kg"], index=["Uds.", "Metros", "Kg"].index(prod_data['unidad_medida']))
+                # 🔧 Modificado: Se agregan 'Horas' y 'Litros' a la edición
+                edit_unidad = st.selectbox("Modificar Unidad", ["Uds.", "Metros", "Kg", "Horas", "Litros"], index=["Uds.", "Metros", "Kg", "Horas", "Litros"].index(prod_data['unidad_medida']))
                 
                 col_btn_p1, col_btn_p2 = st.columns(2)
                 with col_btn_p1:
