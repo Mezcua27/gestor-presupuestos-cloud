@@ -649,6 +649,7 @@ else:
                         eliminar_cliente_en_bd(cli_data['id'])
                         st.rerun()
 
+    # --- NUEVO PRESUPUESTO CON AVISO FIJO DE CONFIRMACIÓN ---
     elif menu == "✍️ Nuevo Presupuesto":
         st.title("✍️ Generar Presupuesto Comercial")
         id_pres = obtener_siguiente_id_presupuesto(st.session_state.empresa)
@@ -701,16 +702,19 @@ else:
                     
                     if st.button("💾 Guardar y Confirmar Presupuesto", type="primary", use_container_width=True):
                         if guardar_presupuesto_en_bd(id_pres, opciones_clientes[cliente_sel], st.session_state.items_presupuesto, descuento_global, tipo_iva, st.session_state.empresa):
-                            st.success(f"¡Presupuesto {id_pres} registrado correctamente!")
-                            st.session_state.items_presupuesto = []
-                            st.rerun()
+                            # 🌟 Alerta fija de éxito en pantalla
+                            st.success(f"🎉 ¡Éxito! El presupuesto {id_pres} ha sido guardado de forma permanente en la base de datos.")
+                            st.session_state.items_presupuesto = [] # Limpiamos la tabla
+                        else:
+                            st.error("Error crítico: No se pudo conectar con la base de datos de presupuestos.")
 
+    # --- SECCIÓN HISTORIAL OPERATIVA ---
     elif menu == "📜 Historial":
         st.title("📜 Historial de Presupuestos")
         historial = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
         
         if not historial:
-            st.info("Aún no se han registrado presupuestos para esta empresa.")
+            st.info("📂 Aún no se han registrado presupuestos para esta empresa o el historial está vacío.")
         else:
             datos_tabla = []
             mapeo_completo = {}
