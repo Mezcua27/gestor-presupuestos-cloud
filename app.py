@@ -200,45 +200,40 @@ def obtener_siguiente_id_presupuesto(empresa):
 
 def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, descuento, iva_porcentaje, empresa):
     try:
-        # 1. Intentar insertar la cabecera
+        # 🛠️ Corrección Supabase: Enviamos tanto 'descuento' como 'descuento_porcentaje' para evitar el fallo estructural
         supabase.table("budgets").insert({
             "id_presupuesto": id_presupuesto, 
             "numero_cliente": numero_cliente, 
             "estado": "Pendiente", 
+            "descuento": descuento,
             "descuento_porcentaje": descuento,
             "iva_porcentaje": iva_porcentaje,
             "empresa": empresa.lower().strip()
         }).execute()
         
-        # 2. Intentar insertar los artículos
         for item in items:
-            # Creamos el diccionario con las opciones más comunes
-            datos_item = {
+            supabase.table("detalles_presupuesto").insert({
                 "id_presupuesto": id_presupuesto, 
                 "marca_producto": item['elemento'], 
                 "modelo_producto": item['marca_fabricante'],
                 "precio_cobrado": item['precio'], 
                 "cantidad": item['cantidad'],
                 "quantity": item['cantidad']
-            }
-            
-            # Ejecutamos la inserción
-            supabase.table("detalles_presupuesto").insert(datos_item).execute()
-            
+            }).execute()
         return True
     except Exception as e:
-        # 🚨 Esto nos mostrará el motivo real del fallo en la interfaz de Streamlit
-        st.error(f"🔍 ERROR REAL DE SUPABASE: {str(e)}")
+        st.error(f"🔍 Error técnico de inserción en Supabase: {str(e)}")
         return False
 
 def consultar_historial_presupuestos(empresa, username=""):
     try:
-        if username.lower().strip() == "admin":
-            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, numero_cliente, empresa").execute()
-        else:
-            res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento_porcentaje, iva_porcentaje, numero_cliente").eq("empresa", empresa.lower().strip()).execute()
+        # Se solicitan de manera segura ambas variantes de columnas de descuento
+        res = supabase.table("budgets").select("id_presupuesto, estado, fecha_envio, descuento, descuento_porcentaje, iva_porcentaje, numero_cliente, empresa").execute()
         
-        presupuestos = res.data if res.data else []
+        if username.lower().strip() != "admin":
+            presupuestos = [p for p in res.data if p.get("empresa", "").lower().strip() == empresa.lower().strip()]
+        else:
+            presupuestos = res.data if res.data else []
         
         if presupuestos:
             res_clientes = supabase.table("clientes").select("numero_cliente, nombre, telefono, email").execute()
@@ -270,13 +265,16 @@ def actualizar_estado_presupuesto(id_presupuesto, nuevo_estado):
 
 # --- 🎨 GENERACIÓN DE PDF CORPORATIVO PREMIUM ---
 def generar_pdf_bytes(id_presupuesto, nombre_empresa_activa):
-    res = supabase.table("budgets").select("estado, fecha_envio, descuento_porcentaje, iva_porcentaje, numero_cliente").eq("id_presupuesto", id_presupuesto).execute()
+    # 🛠️ Solución al error de VS Code (Línea 240): Cambiado 'budgets.table' por 'supabase.table'
+    res = supabase.table("budgets").select("estado, fecha_envio, descuento, descuento_porcentaje, iva_porcentaje, numero_cliente").eq("id_presupuesto", id_presupuesto).execute()
     if not res.data: return None
     
     pres_cabecera = res.data[0]
     estado = pres_cabecera["estado"]
     fecha_envio = pres_cabecera["fecha_envio"] or datetime.date.today().strftime("%Y-%m-%d")
-    pct_descuento = float(pres_cabecera.get("descuento_porcentaje", 0) or 0)
+    
+    # Intenta capturar el descuento de cualquiera de las dos columnas de la BD
+    pct_descuento = float(pres_cabecera.get("descuento", pres_cabecera.get("descuento_porcentaje", 0)) or 0)
     pct_iva = float(pres_cabecera.get("iva_porcentaje", 21) or 0)
     
     res_c = supabase.table("clientes").select("nombre, email, telefono").eq("numero_cliente", pres_cabecera.get("numero_cliente")).execute()
@@ -735,11 +733,14 @@ else:
                 if es_admin: item_tabla["Empresa"] = h.get("empresa", "").upper()
                 datos_tabla.append(item_tabla)
                 
+                # Mapeo tolerante para leer el descuento independientemente de la columna usada
+                desc_valor = float(h.get("descuento", h.get("descuento_porcentaje", 0)) or 0)
+                
                 mapeo_completo[cod] = {
                     "nombre": nombre_c,
                     "telefono": cli_info.get("telefono", ""),
                     "email": cli_info.get("email", ""),
-                    "desc": float(h.get("descuento_porcentaje", 0) or 0),
+                    "desc": desc_valor,
                     "iva": float(h.get("iva_porcentaje", 21) or 0)
                 }
                 
