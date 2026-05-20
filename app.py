@@ -200,6 +200,7 @@ def obtener_siguiente_id_presupuesto(empresa):
 
 def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, descuento, iva_porcentaje, empresa):
     try:
+        # Insertar cabecera del presupuesto
         supabase.table("budgets").insert({
             "id_presupuesto": id_presupuesto, 
             "numero_cliente": numero_cliente, 
@@ -209,16 +210,20 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, descuento, 
             "empresa": empresa.lower().strip()
         }).execute()
         
+        # 🛠️ Inserción segura con doble mapeo por si la base de datos pide 'quantity' o 'cantidad'
         for item in items:
             supabase.table("detalles_presupuesto").insert({
                 "id_presupuesto": id_presupuesto, 
                 "marca_producto": item['elemento'], 
                 "modelo_producto": item['marca_fabricante'],
                 "precio_cobrado": item['precio'], 
-                "cantidad": item['cantidad']
+                "cantidad": item['cantidad'],
+                "quantity": item['cantidad']
             }).execute()
         return True
-    except: 
+    except Exception as e:
+        # Permite ver el error exacto en la terminal si vuelve a fallar la estructura de la tabla
+        print("Error Supabase Insert:", str(e))
         return False
 
 def consultar_historial_presupuestos(empresa, username=""):
@@ -246,7 +251,7 @@ def consultar_historial_presupuestos(empresa, username=""):
 
 def consultar_detalles_de_un_presupuesto(id_presupuesto):
     try:
-        res = supabase.table("detalles_presupuesto").select("marca_producto, modelo_producto, precio_cobrado, quantity:cantidad").eq("id_presupuesto", id_presupuesto).execute()
+        res = supabase.table("detalles_presupuesto").select("marca_producto, modelo_producto, precio_cobrado, quantity:cantidad, cantidad").eq("id_presupuesto", id_presupuesto).execute()
         return res.data if res.data else []
     except: 
         return []
@@ -649,7 +654,6 @@ else:
                         eliminar_cliente_en_bd(cli_data['id'])
                         st.rerun()
 
-    # --- NUEVO PRESUPUESTO CON AVISO FIJO DE CONFIRMACIÓN ---
     elif menu == "✍️ Nuevo Presupuesto":
         st.title("✍️ Generar Presupuesto Comercial")
         id_pres = obtener_siguiente_id_presupuesto(st.session_state.empresa)
@@ -702,13 +706,11 @@ else:
                     
                     if st.button("💾 Guardar y Confirmar Presupuesto", type="primary", use_container_width=True):
                         if guardar_presupuesto_en_bd(id_pres, opciones_clientes[cliente_sel], st.session_state.items_presupuesto, descuento_global, tipo_iva, st.session_state.empresa):
-                            # 🌟 Alerta fija de éxito en pantalla
                             st.success(f"🎉 ¡Éxito! El presupuesto {id_pres} ha sido guardado de forma permanente en la base de datos.")
-                            st.session_state.items_presupuesto = [] # Limpiamos la tabla
+                            st.session_state.items_presupuesto = [] 
                         else:
-                            st.error("Error crítico: No se pudo conectar con la base de datos de presupuestos.")
+                            st.error("Error crítico: Estructura de columnas incompatible detectada en 'detalles_presupuesto'.")
 
-    # --- SECCIÓN HISTORIAL OPERATIVA ---
     elif menu == "📜 Historial":
         st.title("📜 Historial de Presupuestos")
         historial = consultar_historial_presupuestos(st.session_state.empresa, st.session_state.usuario)
