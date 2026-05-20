@@ -200,7 +200,7 @@ def obtener_siguiente_id_presupuesto(empresa):
 
 def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, descuento, iva_porcentaje, empresa):
     try:
-        # Insertar cabecera del presupuesto
+        # 1. Intentar insertar la cabecera
         supabase.table("budgets").insert({
             "id_presupuesto": id_presupuesto, 
             "numero_cliente": numero_cliente, 
@@ -210,20 +210,25 @@ def guardar_presupuesto_en_bd(id_presupuesto, numero_cliente, items, descuento, 
             "empresa": empresa.lower().strip()
         }).execute()
         
-        # 🛠️ Inserción segura con doble mapeo por si la base de datos pide 'quantity' o 'cantidad'
+        # 2. Intentar insertar los artículos
         for item in items:
-            supabase.table("detalles_presupuesto").insert({
+            # Creamos el diccionario con las opciones más comunes
+            datos_item = {
                 "id_presupuesto": id_presupuesto, 
                 "marca_producto": item['elemento'], 
                 "modelo_producto": item['marca_fabricante'],
                 "precio_cobrado": item['precio'], 
                 "cantidad": item['cantidad'],
                 "quantity": item['cantidad']
-            }).execute()
+            }
+            
+            # Ejecutamos la inserción
+            supabase.table("detalles_presupuesto").insert(datos_item).execute()
+            
         return True
     except Exception as e:
-        # Permite ver el error exacto en la terminal si vuelve a fallar la estructura de la tabla
-        print("Error Supabase Insert:", str(e))
+        # 🚨 Esto nos mostrará el motivo real del fallo en la interfaz de Streamlit
+        st.error(f"🔍 ERROR REAL DE SUPABASE: {str(e)}")
         return False
 
 def consultar_historial_presupuestos(empresa, username=""):
